@@ -454,6 +454,11 @@
       </div>
     </template>
 
+    <!-- WorkBuddy CN (CodeBuddy): credits balance + daily check-in -->
+    <template v-else-if="account.platform === 'workbuddy'">
+      <WorkBuddyCreditsCell :account="account" @account-updated="emit('account-updated', $event)" />
+    </template>
+
     <!-- Gemini platform: show quota + local usage window -->
     <template v-else-if="account.platform === 'gemini'">
       <!-- Auth Type + Tier Badge (first line) -->
@@ -660,6 +665,7 @@ import OpenAIQuotaResetCell from './OpenAIQuotaResetCell.vue'
 import GrokQuotaProbeCell from './GrokQuotaProbeCell.vue'
 import CNProviderQuotaCell from './CNProviderQuotaCell.vue'
 import CNProviderBalanceCell from './CNProviderBalanceCell.vue'
+import WorkBuddyCreditsCell from './WorkBuddyCreditsCell.vue'
 import OllamaCloudUsageCell from './OllamaCloudUsageCell.vue'
 import { cnQuotaCellVisible as cnQuotaCellVisibleFn, cnBalanceCellVisible as cnBalanceCellVisibleFn } from './credentialsBuilder'
 
@@ -732,6 +738,10 @@ const showUsageWindows = computed(() => {
     props.account.platform === 'minimax' ||
     props.account.platform === 'opencode_go'
   ) {
+    return true
+  }
+  // WorkBuddy：积分余额 + 每日签到，由 WorkBuddyCreditsCell 自行探测与展示。
+  if (props.account.platform === 'workbuddy') {
     return true
   }
   return props.account.type === 'oauth' || props.account.type === 'setup-token'

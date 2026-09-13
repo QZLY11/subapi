@@ -281,8 +281,10 @@ type WorkBuddyClient struct {
 	ClientVersion string
 	CliVersion    string
 
-	// ChatBase / BillingBase 上游基址覆盖（空 = 官方默认）。
+	// ChatBase 上游基址覆盖（空 = copilot.tencent.com）。
 	ChatBase string
+	// BillingBase billing 域基址覆盖（空 = www.codebuddy.cn）；积分/签到/上报走此域。
+	BillingBase string
 }
 
 // NewWorkBuddyClient 生产默认值（连接池减少 TLS 握手）。

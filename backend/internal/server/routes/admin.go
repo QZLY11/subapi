@@ -506,6 +506,12 @@ func registerWorkBuddyOAuthRoutes(admin *gin.RouterGroup, h *handler.Handlers) {
 		wb.POST("/oauth/refresh-token", h.Admin.WorkBuddyOAuth.RefreshToken)
 		wb.POST("/oauth/create-from-oauth", h.Admin.WorkBuddyOAuth.CreateAccountFromOAuth)
 		wb.POST("/accounts/:id/refresh-token", h.Admin.WorkBuddyOAuth.RefreshAccountToken)
+
+		// 积分查询与签到（billing 域，走 www.codebuddy.cn）。
+		wb.GET("/accounts/:id/credits", h.Admin.WorkBuddyCredits.QueryCredits)
+		wb.POST("/accounts/:id/checkin", h.Admin.WorkBuddyCredits.Checkin)
+		wb.GET("/credits/summary", h.Admin.WorkBuddyCredits.QueryCreditsSummary)
+		wb.POST("/checkin/all", h.Admin.WorkBuddyCredits.CheckinAll)
 	}
 }
 

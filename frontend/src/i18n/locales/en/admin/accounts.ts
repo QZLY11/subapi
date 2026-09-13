@@ -157,6 +157,34 @@ export default {
         balanceLow: 'Insufficient balance',
         noBalanceEndpoint: 'This platform has no balance query endpoint',
       },
+      // WorkBuddy credits & check-in (billing domain: www.codebuddy.cn)
+      workbuddyCredits: {
+        creditsPlaceholder: 'Credits --',
+        creditsTooltip: 'Read this account credit balance from the CodeBuddy billing API',
+        query: 'Query',
+        checkin: 'Check in',
+        checkinAll: 'Check in all',
+        checkinAllRunning: 'Checking in…',
+        checkinTooltip:
+          'Calls the CodeBuddy daily check-in API; an already-claimed day is rejected idempotently upstream and treated as normal',
+        summaryTitle: 'WorkBuddy Overview',
+        accountCount: 'Accounts',
+        totalSize: 'Total credits',
+        totalRemain: 'Credits remaining',
+        todayCheckin: 'Checked in today',
+        accountsUnit: 'accounts',
+        refreshSummary: 'Refresh overview',
+        statusOk: 'Checked in',
+        statusAlready: 'Already checked in',
+        statusFail: 'Check-in failed',
+        checkinDone:
+          'Check-in finished: {ok} new · {already} already · {fail} failed · {skipped} skipped',
+        summaryFailed: 'Failed to refresh overview: {error}',
+        queryFailed: 'Failed to query credits',
+        checkinFailed: 'Check-in failed',
+        remainOfTotal: '{remain} left of {size}',
+        percentRemain: '{percent}% remaining',
+      },
       opencodeGo: {
         accountMode: {
           zen: 'Zen',

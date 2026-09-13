@@ -174,7 +174,10 @@
           </button>
         </div>
       </template>
+      <!-- WorkBuddy 总览：账号总数 / 总计分额度 / 剩余总积分 / 今日已签到数 + 一键签到。
+           组件自身在无 WorkBuddy 账号时不渲染，故不影响其他平台。 -->
       <template #table>
+        <WorkBuddyCreditsPanel class="mb-3" />
         <AccountBulkActionsBar
           :selected-ids="selIds"
           :total-results="pagination.total"
@@ -516,6 +519,7 @@ import ScheduledTestsPanel from '@/components/admin/account/ScheduledTestsPanel.
 import type { SelectOption } from '@/components/common/Select.vue'
 import AccountStatusIndicator from '@/components/account/AccountStatusIndicator.vue'
 import AccountUsageCell from '@/components/account/AccountUsageCell.vue'
+import WorkBuddyCreditsPanel from '@/components/account/WorkBuddyCreditsPanel.vue'
 import AccountTodayStatsCell from '@/components/account/AccountTodayStatsCell.vue'
 import AccountGroupsCell from '@/components/account/AccountGroupsCell.vue'
 import AccountCapacityCell from '@/components/account/AccountCapacityCell.vue'

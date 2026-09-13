@@ -85,10 +85,126 @@ export async function refreshAccountToken(id: number): Promise<unknown> {
   return data
 }
 
+// ============================================================================
+// 积分查询与签到（billing 域，走 www.codebuddy.cn）
+// ============================================================================
+
+export interface WorkBuddyCreditPackage {
+  package_name: string
+  remain: number
+  used: number
+  size: number
+}
+
+export interface WorkBuddyCredits {
+  uid: string
+  nickname?: string
+  remain: number
+  used: number
+  size: number
+  packages?: WorkBuddyCreditPackage[]
+  total_dosage?: number
+}
+
+/** 签到结果状态：ok 成功 / already 今日已签 / fail 失败 / skipped 无凭据。 */
+export type WorkBuddyCheckinStatus = 'ok' | 'already' | 'fail' | 'skipped'
+
+export interface WorkBuddyCheckinResult {
+  uid: string
+  nickname?: string
+  status: WorkBuddyCheckinStatus
+  detail?: string
+  credits?: WorkBuddyCredits
+}
+
+export interface WorkBuddyAccountCredits {
+  account_id: number
+  name: string
+  uid?: string
+  nickname?: string
+  remain: number
+  used: number
+  size: number
+  ok: boolean
+  error?: string
+  checked_in_today: boolean
+  checkin_status?: string
+}
+
+export interface WorkBuddyCreditsSummary {
+  /** WorkBuddy 账号总数 */
+  account_count: number
+  /** 总计分额度 */
+  total_size: number
+  /** 剩余总积分 */
+  total_remain: number
+  /** 已用总积分 */
+  total_used: number
+  /** 今日已签到账号数 */
+  today_checkin_count: number
+  today_checkin_date: string
+  accounts: WorkBuddyAccountCredits[]
+  ok_count: number
+  fail_count: number
+  fetched_at: number
+}
+
+export interface WorkBuddyCheckinAllResponse {
+  results: WorkBuddyCheckinResult[]
+  total: number
+  ok: number
+  already: number
+  fail: number
+  skipped: number
+  summary: string
+  /** 签到后立即回读的汇总统计（可能因查询失败而缺失）。 */
+  credits?: WorkBuddyCreditsSummary
+  credits_error?: string
+}
+
+/** 查询单账号积分（会落 Extra 快照）。 */
+export async function queryCredits(id: number): Promise<WorkBuddyCredits> {
+  const { data } = await apiClient.get<WorkBuddyCredits>(
+    `/admin/workbuddy/accounts/${id}/credits`
+  )
+  return data
+}
+
+/** 单账号签到。 */
+export async function checkinAccount(id: number): Promise<WorkBuddyCheckinResult> {
+  const { data } = await apiClient.post<WorkBuddyCheckinResult>(
+    `/admin/workbuddy/accounts/${id}/checkin`
+  )
+  return data
+}
+
+/** 全量积分汇总（账号总数 / 总计分额度 / 剩余总积分 / 今日已签到数）。 */
+export async function queryCreditsSummary(): Promise<WorkBuddyCreditsSummary> {
+  const { data } = await apiClient.get<WorkBuddyCreditsSummary>(
+    '/admin/workbuddy/credits/summary',
+    { timeout: 120_000 }
+  )
+  return data
+}
+
+/** 一键全量签到。耗时较长（逐账号串行 + 节流），故放宽超时。 */
+export async function checkinAll(): Promise<WorkBuddyCheckinAllResponse> {
+  const { data } = await apiClient.post<WorkBuddyCheckinAllResponse>(
+    '/admin/workbuddy/checkin/all',
+    {},
+    { timeout: 300_000 }
+  )
+  return data
+}
+
 export default {
   generateAuthUrl,
   pollLogin,
   createFromOAuth,
   refreshToken,
   refreshAccountToken,
+  queryCredits,
+  checkinAccount,
+  queryCreditsSummary,
+  checkinAll,
 }
