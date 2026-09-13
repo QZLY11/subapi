@@ -8,7 +8,6 @@ import (
 	"errors"
 	"fmt"
 	"io"
-	"log/slog"
 	"net/http"
 	"strings"
 	"time"
@@ -232,34 +231,6 @@ func (s *OpenAIGatewayService) sendCCUpstreamRequest(
 	// 使配置值获得除共享传输层强制头之外的最高优先级。
 	account.ApplyHeaderOverrides(upstreamReq.Header)
 	applyOpenCodeSessionHeader(c, account, targetURL, upstreamReq.Header, body)
-
-	if account.IsWorkBuddy() {
-		// TODO(debug): 临时排查 workbuddy chat 转发 401，确认最终上游请求形态。定位后删除。
-		bodyPreview := string(body)
-		if len(bodyPreview) > 400 {
-			bodyPreview = bodyPreview[:400]
-		}
-		authPrefix := bearerToken
-		if len(authPrefix) > 20 {
-			authPrefix = authPrefix[:20]
-		}
-		slog.Warn("workbuddy_upstream_debug",
-			"account_id", account.ID,
-			"url", targetURL,
-			"user_agent", upstreamReq.Header.Get("User-Agent"),
-			"x_user_id", upstreamReq.Header.Get("X-User-Id"),
-			"x_enterprise_id", upstreamReq.Header.Get("X-Enterprise-Id"),
-			"x_tenant_id", upstreamReq.Header.Get("X-Tenant-Id"),
-			"x_domain", upstreamReq.Header.Get("X-Domain"),
-			"x_device_token", upstreamReq.Header.Get("X-Device-Token"),
-			"origin", upstreamReq.Header.Get("Origin"),
-			"referer", upstreamReq.Header.Get("Referer"),
-			"accept", upstreamReq.Header.Get("Accept"),
-			"content_type", upstreamReq.Header.Get("Content-Type"),
-			"auth_prefix", authPrefix,
-			"body", bodyPreview,
-		)
-	}
 
 	proxyURL := ""
 	if account.ProxyID != nil && account.Proxy != nil {
