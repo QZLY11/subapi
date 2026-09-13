@@ -237,25 +237,42 @@ func (s *WorkBuddyOAuthService) RefreshToken(ctx context.Context, a *WorkBuddyAu
 	if err := s.client.RefreshToken(ctx, a); err != nil {
 		return nil, infraerrors.New(http.StatusBadGateway, "WORKBUDDY_OAUTH_REFRESH_FAILED", err.Error())
 	}
+	// refresh 端点只回 accessToken/refreshToken/expiresIn/domain，不回 uid/enterprise_id。
+	// 必须把调用方传入的身份字段原样带回，否则 BuildAccountCredentials 会用空字符串
+	// 覆盖账号已有的 uid/enterprise_id，导致 chat 转发缺失 X-User-Id/X-Enterprise-Id
+	// 而被上游判为 invalid issuer。
 	return &WorkBuddyTokenInfo{
 		AccessToken:  a.AccessToken,
 		RefreshToken: a.RefreshToken,
 		Domain:       a.Domain,
 		ExpiresAt:    a.ExpiresAt,
+		UID:          a.UID,
+		EnterpriseID: a.EnterpriseID,
 	}, nil
 }
 
 // BuildAccountCredentials 把 token info 构建为 sub2api 账号 credentials JSONB。
+// 只写非空字段：uid/enterprise_id/domain 为空时省略，避免 refresh 路径用空值
+// 覆盖账号已有的身份字段（chat 上游依赖 X-User-Id/X-Enterprise-Id）。
 func (s *WorkBuddyOAuthService) BuildAccountCredentials(info *WorkBuddyTokenInfo) map[string]any {
 	if info == nil {
 		return map[string]any{}
 	}
-	return map[string]any{
-		"access_token":  info.AccessToken,
-		"refresh_token": info.RefreshToken,
-		"expires_at":    info.ExpiresAt,
-		"domain":        info.Domain,
-		"uid":           info.UID,
-		"enterprise_id": info.EnterpriseID,
+	creds := map[string]any{
+		"access_token": info.AccessToken,
+		"expires_at":   info.ExpiresAt,
 	}
+	if strings.TrimSpace(info.RefreshToken) != "" {
+		creds["refresh_token"] = info.RefreshToken
+	}
+	if strings.TrimSpace(info.Domain) != "" {
+		creds["domain"] = info.Domain
+	}
+	if strings.TrimSpace(info.UID) != "" {
+		creds["uid"] = info.UID
+	}
+	if strings.TrimSpace(info.EnterpriseID) != "" {
+		creds["enterprise_id"] = info.EnterpriseID
+	}
+	return creds
 }
