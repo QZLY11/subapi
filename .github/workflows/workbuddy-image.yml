@@ -1,0 +1,118 @@
+name: WorkBuddy Image
+
+# 在 GitHub Actions 云端构建包含 WorkBuddy 集成的镜像，服务器只负责 docker pull，
+# 无需在服务器上编译（服务器通常内存/磁盘受限，本地编译容易 OOM）。
+#
+# 产出两条获取途径，任选其一：
+#   1) GHCR 镜像：  docker pull ghcr.io/qzly11/subapi:workbuddy
+#   2) Release 附件：下载 sub2api-workbuddy-image.tar.gz 后 docker load
+#
+# 手动触发：Actions -> WorkBuddy Image -> Run workflow
+
+on:
+  workflow_dispatch:
+  push:
+    branches:
+      - workbuddy
+    paths:
+      - 'Dockerfile'
+      - 'backend/**'
+      - 'frontend/**'
+      - 'docs/legal/**'
+      - 'scripts/**'
+      - '.github/workflows/workbuddy-image.yml'
+
+permissions:
+  contents: write
+  packages: write
+
+jobs:
+  build:
+    name: Build and publish image (linux/amd64)
+    runs-on: ubuntu-latest
+    timeout-minutes: 90
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+
+      - name: Lowercase image name
+        id: img
+        env:
+          RAW: ghcr.io/${{ github.repository }}
+        run: echo "name=${RAW,,}" >> "$GITHUB_OUTPUT"
+
+      - name: Log in to GitHub Container Registry
+        uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      # 前端 + Go 后端共用一份 Dockerfile，产物是带 embed 前端的静态二进制。
+      - name: Build and push image
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          file: ./Dockerfile
+          platforms: linux/amd64
+          push: true
+          tags: |
+            ${{ steps.img.outputs.name }}:workbuddy
+            ${{ steps.img.outputs.name }}:workbuddy-${{ github.sha }}
+          build-args: |
+            VERSION=workbuddy-${{ github.run_number }}
+            COMMIT=${{ github.sha }}
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
+
+      # GHCR 包默认是私有的，这里尽力改成公开；失败也不影响后面的 Release 兜底。
+      - name: Try to make GHCR package public
+        continue-on-error: true
+        run: |
+          pkg="${GITHUB_REPOSITORY#*/}"
+          echo "package=$pkg"
+          curl -sS -o /tmp/vis.json -w "HTTP %{http_code}\n" -X PATCH \
+            -H "Authorization: Bearer ${{ secrets.GITHUB_TOKEN }}" \
+            -H "Accept: application/vnd.github+json" \
+            "https://api.github.com/user/packages/container/${pkg}" \
+            -d '{"visibility":"public"}' || true
+          cat /tmp/vis.json || true
+
+      # 兜底方案：把镜像导出成压缩包挂到 Release，公开下载、无需任何凭据。
+      - name: Export image tarball
+        run: |
+          img='${{ steps.img.outputs.name }}:workbuddy'
+          docker pull "$img"
+          docker save "$img" | gzip -1 > sub2api-workbuddy-image.tar.gz
+          ls -lh sub2api-workbuddy-image.tar.gz
+
+      - name: Publish Release with image tarball
+        continue-on-error: true
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: workbuddy-image
+          name: WorkBuddy 镜像（linux/amd64）
+          prerelease: true
+          files: sub2api-workbuddy-image.tar.gz
+          body: |
+            包含 WorkBuddy (CodeBuddy CN) 平台集成的 sub2api 镜像，构建于 ${{ github.sha }}。
+
+            ## 方式一：直接从 GHCR 拉取
+
+            ```bash
+            docker pull ghcr.io/qzly11/subapi:workbuddy
+            ```
+
+            ## 方式二：使用本 Release 的镜像压缩包（无需凭据）
+
+            ```bash
+            curl -L -o sub2api-workbuddy-image.tar.gz \
+              https://github.com/qzly11/subapi/releases/download/workbuddy-image/sub2api-workbuddy-image.tar.gz
+            docker load -i sub2api-workbuddy-image.tar.gz
+            ```
+
+            加载后镜像名为 `ghcr.io/qzly11/subapi:workbuddy`，可直接在 docker-compose 中引用。
