@@ -1185,6 +1185,12 @@ func (h *GatewayHandler) Models(c *gin.Context) {
 		writeGrokModelsList(c, xai.DefaultModelIDs())
 		return
 	}
+	// WorkBuddy CN（CodeBuddy）走 OpenAI 网关转发，模型列表须用 OpenAI 格式
+	// 返回（否则此前会落到 claude.DefaultModels，客户端拿到的是 Claude 模型目录）。
+	if platform == service.PlatformWorkBuddy {
+		writeOpenAIModelsList(c, defaultModelIDsForPlatform(platform))
+		return
+	}
 
 	writeModelsListResponse(c, claude.DefaultModels)
 }

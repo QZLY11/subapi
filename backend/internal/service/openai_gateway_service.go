@@ -1264,6 +1264,15 @@ func (s *OpenAIGatewayService) GetAccessToken(ctx context.Context, account *Acco
 			return "", "", errors.New("api_key not found in credentials")
 		}
 		return apiKey, "apikey", nil
+	case AccountTypeWorkBuddyOAuth:
+		// WorkBuddy CN（CodeBuddy）OAuth 账号：access_token 由后台
+		// WorkBuddyTokenRefresher 预热刷新并写回 credentials，转发路径直接读取。
+		// 与 Grok OAuth 的降级路径（account.GetGrokAccessToken()）口径一致。
+		accessToken := strings.TrimSpace(account.GetCredential("access_token"))
+		if accessToken == "" {
+			return "", "", errors.New("access_token not found in credentials")
+		}
+		return accessToken, "oauth", nil
 	default:
 		return "", "", fmt.Errorf("unsupported account type: %s", account.Type)
 	}

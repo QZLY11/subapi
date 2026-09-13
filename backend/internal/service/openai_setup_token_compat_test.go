@@ -67,6 +67,24 @@ func TestOpenAIGatewayServiceGetAccessTokenSetupToken(t *testing.T) {
 	}
 }
 
+func TestOpenAIGatewayServiceGetAccessTokenWorkBuddyOAuth(t *testing.T) {
+	svc := &OpenAIGatewayService{}
+	account := &Account{
+		Platform:    PlatformWorkBuddy,
+		Type:        AccountTypeWorkBuddyOAuth,
+		Credentials: map[string]any{"access_token": "wb-access-token"},
+	}
+
+	token, tokenType, err := svc.GetAccessToken(context.Background(), account)
+	require.NoError(t, err)
+	require.Equal(t, "wb-access-token", token)
+	require.Equal(t, "oauth", tokenType)
+
+	delete(account.Credentials, "access_token")
+	_, _, err = svc.GetAccessToken(context.Background(), account)
+	require.EqualError(t, err, "access_token not found in credentials")
+}
+
 func TestOpenAISetupTokenImagesUsesOAuthDirectPath(t *testing.T) {
 	gin.SetMode(gin.TestMode)
 	c, _ := gin.CreateTestContext(httptest.NewRecorder())
