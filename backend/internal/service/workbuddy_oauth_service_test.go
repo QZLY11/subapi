@@ -56,6 +56,43 @@ func TestWorkBuddyOAuthService_RefreshToken_PreservesIdentity(t *testing.T) {
 	require.Equal(t, "ent-123", creds["enterprise_id"])
 }
 
+// TestApplyWorkBuddyUpstreamHeaders_DoesNotInheritClientUA 验证 applyWorkBuddyUpstreamHeaders
+// 不会把管线透传的客户端 UA（如 curl/x.x）当作最终 UA，否则上游按 UA 指纹校验
+// issuer 会报 401 "not from a valid issuer"。
+func TestApplyWorkBuddyUpstreamHeaders_DoesNotInheritClientUA(t *testing.T) {
+	acct := &Account{
+		Platform:    PlatformWorkBuddy,
+		Type:        AccountTypeWorkBuddyOAuth,
+		Credentials: map[string]any{"uid": "uid-123", "domain": "www.codebuddy.cn"},
+	}
+
+	h := http.Header{}
+	// 模拟 sendCCUpstreamRequest 先透传客户端 UA。
+	h.Set("User-Agent", "curl/8.5.0")
+
+	applyWorkBuddyUpstreamHeaders(h, acct)
+
+	require.Equal(t, (&WorkBuddyClient{}).userAgent(), h.Get("User-Agent"))
+	require.Equal(t, "uid-123", h.Get("X-User-Id"))
+	require.Equal(t, "www.codebuddy.cn", h.Get("X-Domain"))
+	require.Equal(t, wbOriginReferer, h.Get("Origin"))
+}
+
+// TestApplyWorkBuddyUpstreamHeaders_AccountUAOverridesDefault 验证账号级 user_agent
+// credential 优先于官方默认 UA。
+func TestApplyWorkBuddyUpstreamHeaders_AccountUAOverridesDefault(t *testing.T) {
+	acct := &Account{
+		Platform:    PlatformWorkBuddy,
+		Type:        AccountTypeWorkBuddyOAuth,
+		Credentials: map[string]any{"user_agent": "CustomUA/1.0"},
+	}
+
+	h := http.Header{}
+	applyWorkBuddyUpstreamHeaders(h, acct)
+
+	require.Equal(t, "CustomUA/1.0", h.Get("User-Agent"))
+}
+
 // TestWorkBuddyOAuthService_BuildAccountCredentials_OmitsEmptyIdentity 验证
 // uid/enterprise_id/domain 为空时被省略，避免 MergeCredentials 用空值覆盖旧值。
 func TestWorkBuddyOAuthService_BuildAccountCredentials_OmitsEmptyIdentity(t *testing.T) {

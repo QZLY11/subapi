@@ -225,16 +225,15 @@ func applyWorkBuddyUpstreamHeaders(h http.Header, a *Account) {
 	if auth.DeviceToken != "" {
 		h.Set("X-Device-Token", auth.DeviceToken)
 	}
-	// UA 优先级：账号 credentials.user_agent > 管线已设的自定义 UA > 官方 WorkBuddy
-	// 三段式默认值。注意 GetOpenAIUserAgent() 只认 openai 平台，故 workbuddy 的
-	// 账号级 UA 必须在这里读取，否则自定义 UA 会被默认值覆盖。
+	// UA 优先级：账号 credentials.user_agent > 官方 WorkBuddy 三段式默认值。
+	// 注意：不能 fallback 到 h.Get("User-Agent") —— 那可能是管线透传的客户端 UA
+	// （openaiCCRawAllowedHeaders 放行了 user-agent，如 curl/x.x），上游会按 UA
+	// 指纹校验 issuer，客户端 UA 会导致 401 "not from a valid issuer"。
+	// GetOpenAIUserAgent() 只认 openai 平台，故 workbuddy 的账号级 UA 必须在这里读取。
 	// Origin/Referer 必须为 CodeBuddy 白名单域，上游会校验，故无条件补齐。
 	h.Set("Origin", wbOriginReferer)
 	h.Set("Referer", wbOriginReferer+"/")
 	ua := strings.TrimSpace(a.GetCredential("user_agent"))
-	if ua == "" {
-		ua = strings.TrimSpace(h.Get("User-Agent"))
-	}
 	if ua == "" {
 		ua = (&WorkBuddyClient{}).userAgent()
 	}
