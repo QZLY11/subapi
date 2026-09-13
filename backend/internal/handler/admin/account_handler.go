@@ -2946,6 +2946,29 @@ func (h *AccountHandler) GetAvailableModels(c *gin.Context) {
 		return
 	}
 
+	// Handle WorkBuddy CN accounts: 优先动态拉取上游模型目录，失败回落静态目录。
+	// 走 OpenAI 网关转发，模型条目须带 display_name 供测试连接弹窗的下拉框展示。
+	if account.IsWorkBuddy() {
+		modelIDs := service.DefaultWorkBuddyModelIDs()
+		if h.accountTestService != nil {
+			if liveIDs, fetchErr := h.accountTestService.FetchUpstreamSupportedModels(c.Request.Context(), account); fetchErr == nil && len(liveIDs) > 0 {
+				modelIDs = liveIDs
+			}
+		}
+		models := make([]openai.Model, 0, len(modelIDs))
+		for _, modelID := range modelIDs {
+			models = append(models, openai.Model{
+				ID:          modelID,
+				Object:      "model",
+				Type:        "model",
+				OwnedBy:     "workbuddy",
+				DisplayName: modelID,
+			})
+		}
+		response.Success(c, models)
+		return
+	}
+
 	// Handle Claude/Anthropic accounts
 	// For OAuth and Setup-Token accounts: return default models
 	if account.IsOAuth() {

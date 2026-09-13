@@ -149,6 +149,45 @@ func TestAccountHandlerGetAvailableModels_GrokDefaultsToXAIModelsWithoutMapping(
 	require.Contains(t, ids, "grok-build-0.1")
 }
 
+func TestAccountHandlerGetAvailableModels_WorkBuddyUsesWorkBuddyModels(t *testing.T) {
+	svc := &availableModelsAdminService{
+		stubAdminService: newStubAdminService(),
+		account: service.Account{
+			ID:       50,
+			Name:     "workbuddy-oauth",
+			Platform: service.PlatformWorkBuddy,
+			Type:     service.AccountTypeWorkBuddyOAuth,
+			Status:   service.StatusActive,
+		},
+	}
+	// accountTestService 为 nil → 走静态目录回落分支（DefaultWorkBuddyModelIDs）。
+	router := setupAvailableModelsRouter(svc)
+
+	rec := httptest.NewRecorder()
+	req := httptest.NewRequest(http.MethodGet, "/api/v1/admin/accounts/50/models", nil)
+	router.ServeHTTP(rec, req)
+
+	require.Equal(t, http.StatusOK, rec.Code)
+
+	var resp struct {
+		Data []struct {
+			ID          string `json:"id"`
+			DisplayName string `json:"display_name"`
+		} `json:"data"`
+	}
+	require.NoError(t, json.Unmarshal(rec.Body.Bytes(), &resp))
+	require.NotEmpty(t, resp.Data)
+
+	var ids []string
+	for _, model := range resp.Data {
+		ids = append(ids, model.ID)
+		require.NotContains(t, strings.ToLower(model.ID), "claude")
+		require.NotEmpty(t, model.DisplayName)
+	}
+	require.Contains(t, ids, "glm-5.2")
+	require.Contains(t, ids, "deepseek-v4-pro")
+}
+
 func TestAccountHandlerGetAvailableModels_OpenAIOAuthUsesExplicitModelMapping(t *testing.T) {
 	svc := &availableModelsAdminService{
 		stubAdminService: newStubAdminService(),
