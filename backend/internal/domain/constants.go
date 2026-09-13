@@ -31,7 +31,11 @@ const (
 	// PlatformOpenCodeGo 是 OpenCode 平台（账号类型 Zen 按量 / Go 订阅）。
 	// 值保持 opencode_go 以兼容已落库的分组、配额与 Composite 路由 CHECK。
 	PlatformOpenCodeGo = "opencode_go"
-	PlatformComposite  = "composite"
+	// PlatformWorkBuddy 是 WorkBuddy CN（CodeBuddy / copilot.tencent.com）平台。
+	// 走 OAuth 设备授权 + /v2/chat/completions 端点，协议上兼容 OpenAI Chat Completions，
+	// 经 OpenAI 网关转发（同 deepseek 家族）。
+	PlatformWorkBuddy = "workbuddy"
+	PlatformComposite = "composite"
 )
 
 // Account mode constants 区分国产供应商的「按量付费（余额）」与「Coding Plan」两种接入方式。
@@ -61,6 +65,10 @@ const (
 	AccountTypeUpstream       = "upstream"        // 上游透传类型账号（通过 Base URL + API Key 连接上游）
 	AccountTypeBedrock        = "bedrock"         // AWS Bedrock 类型账号（通过 SigV4 签名或 API Key 连接 Bedrock，由 credentials.auth_mode 区分）
 	AccountTypeServiceAccount = "service_account" // Google Service Account 类型账号（用于 Vertex AI）
+	// AccountTypeWorkBuddyOAuth 是 WorkBuddy CN 的 OAuth 账号类型（设备授权流）。
+	// credentials 结构：access_token / refresh_token / expires_at / uid / enterprise_id / domain / device_token。
+	// 独立于通用 AccountTypeOAuth，因其 token 存储、刷新端点、header 组与 Gemini/Grok OAuth 完全不同。
+	AccountTypeWorkBuddyOAuth = "workbuddy_oauth"
 )
 
 // Redeem type constants

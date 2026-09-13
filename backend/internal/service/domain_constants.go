@@ -50,6 +50,9 @@ const (
 	PlatformMiniMax    = domain.PlatformMiniMax
 	PlatformOpenCodeGo = domain.PlatformOpenCodeGo
 	PlatformComposite  = domain.PlatformComposite
+	// PlatformWorkBuddy 是 WorkBuddy CN（CodeBuddy / copilot.tencent.com）平台，
+	// 经 OpenAI 网关转发到 /v2/chat/completions。
+	PlatformWorkBuddy = domain.PlatformWorkBuddy
 	// PlatformKiro is retained for unsupported-platform threshold tests and legacy
 	// account rows. Scheduling-threshold evaluation never pauses kiro accounts.
 	PlatformKiro = "kiro"
@@ -135,6 +138,7 @@ var AllowedQuotaPlatforms = []string{
 	PlatformDeepseek,
 	PlatformMiniMax,
 	PlatformOpenCodeGo,
+	PlatformWorkBuddy,
 }
 
 // AllowedSchedulingThresholdPlatforms 是允许设置账号自动停调阈值的平台列表。
@@ -168,6 +172,7 @@ const (
 	AccountTypeUpstream       = domain.AccountTypeUpstream       // 上游透传类型账号（通过 Base URL + API Key 连接上游）
 	AccountTypeBedrock        = domain.AccountTypeBedrock        // AWS Bedrock 类型账号（通过 SigV4 签名或 API Key 连接 Bedrock，由 credentials.auth_mode 区分）
 	AccountTypeServiceAccount = domain.AccountTypeServiceAccount // Google Service Account 类型账号（用于 Vertex AI）
+	AccountTypeWorkBuddyOAuth = domain.AccountTypeWorkBuddyOAuth // WorkBuddy CN OAuth 类型账号（设备授权流）
 )
 
 // Redeem type constants

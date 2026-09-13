@@ -183,6 +183,10 @@ func (s *OpenAIGatewayService) sendCCUpstreamRequest(
 	grokCacheIdentity string,
 ) (*http.Response, error) {
 	upstreamCtx, releaseUpstreamCtx := detachUpstreamContext(ctx)
+	if account.IsWorkBuddy() {
+		// WorkBuddy 上游强制 stream + tool_choice 归一化 + developer→system。
+		body = PrepareWorkBuddyChatPayload(body)
+	}
 	upstreamReq, err := http.NewRequestWithContext(upstreamCtx, http.MethodPost, targetURL, bytes.NewReader(body))
 	releaseUpstreamCtx()
 	if err != nil {
@@ -219,6 +223,9 @@ func (s *OpenAIGatewayService) sendCCUpstreamRequest(
 			applyGrokCLIHeaders(upstreamReq.Header)
 		}
 		applyGrokCacheHeaders(upstreamReq.Header, grokCacheIdentity)
+	}
+	if account.IsWorkBuddy() {
+		applyWorkBuddyUpstreamHeaders(upstreamReq.Header, account)
 	}
 	// 账号级请求头覆写：放在所有内置默认头（含 Grok CLI 身份头）之后应用，
 	// 使配置值获得除共享传输层强制头之外的最高优先级。

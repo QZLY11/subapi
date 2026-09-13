@@ -1240,6 +1240,37 @@ export default {
           },
           oauthOnlyHint: 'Initial Grok support is OAuth subscription-backed Responses API text and reasoning traffic only.'
         },
+        // WorkBuddy CN (CodeBuddy) device authorization flow
+        workbuddy: {
+          title: 'WorkBuddy Account Authorization',
+          step1GenerateUrl: 'Generate the device authorization link',
+          step1Desc:
+            'Request a one-time authorization link from Tencent CodeBuddy (the state is valid for 5 minutes).',
+          generateAuthUrl: 'Generate auth URL',
+          regenerate: 'Regenerate auth URL',
+          step2OpenUrl: 'Open the auth link in your browser and sign in',
+          step2Desc:
+            'The link is valid for 5 minutes. Open it in a new tab and complete the CodeBuddy sign-in; this page polls for the result automatically.',
+          openUrl: 'Open auth link',
+          copyUrl: 'Copy link',
+          copied: 'Copied',
+          waitingLogin: 'Waiting for authorization to complete…',
+          loginSuccess: 'Authorized — access token acquired',
+          step3Confirm: 'Confirm account details and create',
+          nickname: 'Nickname',
+          uid: 'User ID',
+          enterpriseId: 'Enterprise ID',
+          domain: 'Domain',
+          expiresAt: 'Token expires at',
+          createAccount: 'Create account',
+          created: 'WorkBuddy account created',
+          notice:
+            'WorkBuddy uses the CLI device authorization flow; tokens are refreshed in the background after expiry. Make sure the server can reach copilot.tencent.com.',
+          failedToGenerateUrl: 'Failed to generate the WorkBuddy auth URL',
+          pollFailed: 'Failed to poll the WorkBuddy authorization result',
+          createFailed: 'Failed to create the WorkBuddy account',
+          copyFailed: 'Copy failed — please copy manually'
+        },
         // Gemini specific
 	        gemini: {
 	          title: 'Gemini Account Authorization',

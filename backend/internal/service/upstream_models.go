@@ -774,6 +774,8 @@ func (s *AccountTestService) fetchUpstreamModelList(ctx context.Context, account
 	extractModels := extractUpstreamModelIDs
 	if account.IsGrok() {
 		extractModels = extractGrokUpstreamModelIDs
+	} else if account.IsWorkBuddy() {
+		extractModels = extractWorkBuddyUpstreamModelIDs
 	}
 	models, err := extractModels(body)
 	if err != nil {
@@ -792,6 +794,9 @@ func (s *AccountTestService) buildUpstreamModelsRequest(ctx context.Context, acc
 		return s.buildAntigravityAPIKeyModelsRequest(ctx, account)
 	case account.IsGrok():
 		return s.buildGrokUpstreamModelsRequest(ctx, account)
+	case account.IsWorkBuddy():
+		// WorkBuddy CN：走 /console/enterprises/personal/models 动态模型接口。
+		return s.buildWorkBuddyUpstreamModelsRequest(ctx, account)
 	case account.IsOpenAI() || account.IsCNProvider() || account.IsOpenCodeGo():
 		// 国产 OpenAI 兼容供应商（kimi/zhipu/deepseek）与 OpenCode Go
 		// 复用 OpenAI /v1/models 探测。

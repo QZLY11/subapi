@@ -389,6 +389,13 @@ func (s *AccountTestService) TestAccountConnection(c *gin.Context, accountID int
 		return s.testOpenCodeGoAccountConnection(c, account, modelID, prompt)
 	}
 
+	if account.IsWorkBuddy() {
+		// WorkBuddy CN OAuth：凭证是 access_token，上游只有 Chat Completions。
+		// 若不在此分流，会落到 testClaudeAccountConnection，用腾讯 token 去探
+		// Anthropic 的 base_url + /v1/messages?beta=true，必然 404/401。
+		return s.testWorkBuddyAccountConnection(c, account, modelID, prompt)
+	}
+
 	return s.testClaudeAccountConnection(c, account, modelID)
 }
 
@@ -445,6 +452,34 @@ func (s *AccountTestService) testCNProviderChatCompletionsConnection(c *gin.Cont
 	authToken := strings.TrimSpace(account.GetOpenAIProtocolAPIKey())
 	if authToken == "" {
 		return s.sendErrorAndEnd(c, "No API key available")
+	}
+
+	baseURL := account.GetOpenAIBaseURL()
+	normalizedBaseURL, err := s.validateUpstreamBaseURL(baseURL)
+	if err != nil {
+		return s.sendErrorAndEnd(c, fmt.Sprintf("Invalid base URL: %s", err.Error()))
+	}
+
+	return s.testOpenAIChatCompletionsConnection(c, account, testModelID, prompt, normalizedBaseURL, authToken)
+}
+
+// testWorkBuddyAccountConnection 探测 WorkBuddy CN（CodeBuddy）账号。
+// 凭证是 OAuth access_token（Bearer），上游只有 /v2/chat/completions 一类
+// OpenAI Chat Completions 端点，因此复用 testOpenAIChatCompletionsConnection，
+// 由后者按 account.IsWorkBuddy() 追加 body 改写与 WorkBuddy 身份头。
+//
+// base_url 来自 GetOpenAIBaseURL()（默认 https://copilot.tencent.com/v2），
+// buildOpenAIEndpointURL 会据 /v2 版本段拼出 /v2/chat/completions。
+func (s *AccountTestService) testWorkBuddyAccountConnection(c *gin.Context, account *Account, modelID string, prompt string) error {
+	testModelID := strings.TrimSpace(modelID)
+	if testModelID == "" {
+		testModelID = DefaultWorkBuddyTestModel
+	}
+	testModelID = account.GetMappedModel(testModelID)
+
+	authToken := strings.TrimSpace(account.GetOpenAIProtocolAPIKey())
+	if authToken == "" {
+		return s.sendErrorAndEnd(c, "No access token available")
 	}
 
 	baseURL := account.GetOpenAIBaseURL()
@@ -2090,6 +2125,11 @@ func (s *AccountTestService) testOpenAIChatCompletionsConnection(
 
 	payload := createOpenAIChatCompletionsTestPayload(testModelID, prompt)
 	payloadBytes, _ := json.Marshal(payload)
+	if account.IsWorkBuddy() {
+		// 探测流量与真实转发同构：同样的 body 改写（强制 stream / tool_choice 归一化 /
+		// developer→system / thinking 注入），否则上游会拒或返回与转发路径不同的结果。
+		payloadBytes = PrepareWorkBuddyChatPayload(payloadBytes)
+	}
 
 	s.sendEvent(c, TestEvent{Type: "test_start", Model: testModelID})
 	s.sendEvent(c, TestEvent{Type: "status", Text: "正在通过 /v1/chat/completions 测试连接"})
@@ -2102,6 +2142,12 @@ func (s *AccountTestService) testOpenAIChatCompletionsConnection(
 	req.Header.Set("Content-Type", "application/json")
 	req.Header.Set("Accept", "text/event-stream")
 	req.Header.Set("Authorization", "Bearer "+authToken)
+
+	if account.IsWorkBuddy() {
+		// 与真实转发一致补 WorkBuddy 身份头（X-User-Id/Origin/Referer/UA），
+		// 否则探测会因缺身份头被上游拒绝，得到假阴性。
+		applyWorkBuddyUpstreamHeaders(req.Header, account)
+	}
 
 	// 账号级请求头覆写：测试请求与真实转发保持一致的最终头
 	account.ApplyHeaderOverrides(req.Header)

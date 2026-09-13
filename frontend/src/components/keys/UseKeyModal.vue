@@ -1252,6 +1252,7 @@ function generateRoutedCodexFiles(
     deepseek: 'DeepSeek',
     minimax: 'MiniMax',
     opencode_go: 'OpenCode',
+    workbuddy: 'WorkBuddy',
     composite: 'Composite'
   }
   const label = labels[platform]

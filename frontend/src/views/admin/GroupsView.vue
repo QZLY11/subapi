@@ -4613,9 +4613,12 @@ const platformFilterOptions = computed(() => [
   ...GROUP_PLATFORM_OPTIONS,
 ]);
 
-const compositeRoutePlatformOptions = computed(() => [
-  ...CONCRETE_PLATFORM_OPTIONS,
-]);
+// 复合路由的目标平台必须与后端 CompositeRouteRequest.TargetPlatform 的
+// oneof 白名单一致；workbuddy 未纳入 composite 成员（见 isConcreteRequestPlatform），
+// 因此这里要从具体平台目录中剔除，避免选出一个提交必被 400 拒绝的选项。
+const compositeRoutePlatformOptions = computed(() =>
+  [...CONCRETE_PLATFORM_OPTIONS].filter((option) => option.value !== "workbuddy"),
+);
 
 const compositeRouteEndpointOptions = computed(() => [
   { value: "any", label: t("admin.groups.compositeRoutes.endpoints.any") },

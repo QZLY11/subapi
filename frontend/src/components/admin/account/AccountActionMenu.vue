@@ -33,6 +33,10 @@
                 <Icon name="link" size="sm" />
                 {{ t('admin.accounts.reAuthorize') }}
               </button>
+            </template>
+            <!-- WorkBuddy CN 走独立的设备授权流，无通用「重新授权」入口（ReAuthAccountModal 未覆盖），
+                 但支持用 refresh_token 刷新凭据（后端 refreshSingleAccount 已分流 workbuddy_oauth）。 -->
+            <template v-if="canRefreshToken && !isShadow">
               <button @click="$emit('refresh-token', account); $emit('close')" class="flex w-full items-center gap-2 px-4 py-2 text-sm text-purple-600 hover:bg-gray-100 dark:hover:bg-dark-700">
                 <Icon name="refresh" size="sm" />
                 {{ t('admin.accounts.refreshToken') }}
@@ -131,6 +135,12 @@ const isAntigravityOAuth = computed(() => props.account?.platform === 'antigravi
 const isOpenAIOAuth = computed(() => props.account?.platform === 'openai' && props.account?.type === 'oauth')
 // 影子账号(链接型,持 parent_account_id)不持凭据、type 不可变,凭据/隐私类操作对其无效。
 const isShadow = computed(() => props.account?.parent_account_id != null)
+// 「刷新 token」入口：通用 OAuth/SetupToken 账号 + WorkBuddy CN 的 workbuddy_oauth。
+// workbuddy 有独立类型，后端 refreshSingleAccount 已为其分流，故单独列出。
+const canRefreshToken = computed(() => {
+  const type = props.account?.type
+  return type === 'oauth' || type === 'setup-token' || type === 'workbuddy_oauth'
+})
 // A "parent" OpenAI OAuth account is one that is NOT itself a shadow (parent_account_id == null)
 const isOpenAIOAuthParent = computed(() => isOpenAIOAuth.value && !isShadow.value)
 const supportsPrivacy = computed(() => (isAntigravityOAuth.value || isOpenAIOAuth.value) && !isShadow.value)

@@ -1453,6 +1453,9 @@ func defaultModelIDsForPlatform(platform string) []string {
 		return xai.DefaultModelIDs()
 	case service.PlatformOpenCodeGo:
 		return service.DefaultOpenCodeGoModelIDs()
+	case service.PlatformWorkBuddy:
+		// 上游动态模型接口不可达时的回退表（与 workbuddy2api staticModels 一致）。
+		return service.DefaultWorkBuddyModelIDs()
 	case service.PlatformComposite:
 		ids := make([]string, 0)
 		seen := make(map[string]struct{})

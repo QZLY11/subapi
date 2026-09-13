@@ -65,12 +65,20 @@ type AccountHandler struct {
 	grokImportProber        grokImportProber
 	upstreamBillingProbe    *service.UpstreamBillingProbeService
 	ollamaCloudUsage        *service.OllamaCloudUsageService
+	workbuddyOAuthService   *service.WorkBuddyOAuthService
 	cfg                     *config.Config
 }
 
 // SetUpstreamBillingProbeService attaches the optional remote billing probe service.
 func (h *AccountHandler) SetUpstreamBillingProbeService(probe *service.UpstreamBillingProbeService) {
 	h.upstreamBillingProbe = probe
+}
+
+// SetWorkBuddyOAuthService 注入 WorkBuddy CN OAuth 服务，使通用的账号刷新端点
+// （/admin/accounts/:id/refresh 与 batch-refresh）也能刷新 workbuddy_oauth 账号。
+// 通过 setter 注入而非构造函数参数，避免改变 NewAccountHandler 签名（大量测试直接调用）。
+func (h *AccountHandler) SetWorkBuddyOAuthService(svc *service.WorkBuddyOAuthService) {
+	h.workbuddyOAuthService = svc
 }
 
 func (h *AccountHandler) SetOllamaCloudUsageService(usage *service.OllamaCloudUsageService) {
@@ -117,7 +125,7 @@ type CreateAccountRequest struct {
 	Name                    string         `json:"name" binding:"required"`
 	Notes                   *string        `json:"notes"`
 	Platform                string         `json:"platform" binding:"required"`
-	Type                    string         `json:"type" binding:"required,oneof=oauth setup-token apikey upstream bedrock service_account"`
+	Type                    string         `json:"type" binding:"required,oneof=oauth setup-token apikey upstream bedrock service_account workbuddy_oauth"`
 	Credentials             map[string]any `json:"credentials" binding:"required"`
 	Extra                   map[string]any `json:"extra"`
 	ProxyID                 *int64         `json:"proxy_id"`
@@ -137,7 +145,7 @@ type CreateAccountRequest struct {
 type UpdateAccountRequest struct {
 	Name                    string         `json:"name"`
 	Notes                   *string        `json:"notes"`
-	Type                    string         `json:"type" binding:"omitempty,oneof=oauth setup-token apikey upstream bedrock service_account"`
+	Type                    string         `json:"type" binding:"omitempty,oneof=oauth setup-token apikey upstream bedrock service_account workbuddy_oauth"`
 	Credentials             map[string]any `json:"credentials"`
 	Extra                   map[string]any `json:"extra"`
 	ProxyID                 *int64         `json:"proxy_id"`
@@ -1382,7 +1390,9 @@ func (h *AccountHandler) PreviewFromCRS(c *gin.Context) {
 // refreshSingleAccount refreshes credentials for a single OAuth account.
 // Returns (updatedAccount, warning, error) where warning is used for Antigravity ProjectIDMissing scenario.
 func (h *AccountHandler) refreshSingleAccount(ctx context.Context, account *service.Account) (*service.Account, string, error) {
-	if !account.IsOAuth() {
+	if !account.IsOAuth() && !account.IsWorkBuddyOAuth() {
+		// WorkBuddy CN 用独立的 workbuddy_oauth 类型（token 结构/刷新端点不同），
+		// 不属于通用 IsOAuth()，但同样支持凭据刷新。
 		return nil, "", infraerrors.BadRequest("NOT_OAUTH", "cannot refresh non-OAuth account")
 	}
 	// spark 影子凭据由母账号管理、自身恒空,刷新无意义且会先打上游;在调用上游前早拒
@@ -1473,6 +1483,17 @@ func (h *AccountHandler) refreshSingleAccount(ctx context.Context, account *serv
 		if baseURL := strings.TrimSpace(account.GetCredential("base_url")); baseURL != "" {
 			newCredentials["base_url"] = baseURL
 		}
+	} else if account.IsWorkBuddyOAuth() {
+		if h.workbuddyOAuthService == nil {
+			return nil, "", fmt.Errorf("workbuddy oauth service is not configured")
+		}
+		// 与后台刷新器同一实现：RefreshToken + BuildAccountCredentials + MergeCredentials，
+		// 并保留账号显式配置的 base_url。
+		refreshed, refreshErr := service.NewWorkBuddyTokenRefresher(h.workbuddyOAuthService).Refresh(ctx, account)
+		if refreshErr != nil {
+			return nil, "", fmt.Errorf("failed to refresh WorkBuddy credentials: %w", refreshErr)
+		}
+		newCredentials = refreshed
 	} else {
 		// Use Anthropic/Claude OAuth service to refresh token
 		tokenInfo, err := h.oauthService.RefreshAccountToken(ctx, account)

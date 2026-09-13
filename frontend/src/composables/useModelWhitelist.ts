@@ -467,6 +467,13 @@ export function getModelsByPlatform(platform: string): string[] {
     ]
     case 'doubao': return doubaoModels
     case 'minimax': return minimaxModels
+    case 'workbuddy': return [
+      'glm-5.2', 'glm-5.1', 'glm-5v-turbo',
+      'kimi-k2.7',
+      'minimax-m3',
+      'hy3', 'hy3-preview', 'hy3-preview-agent',
+      'deepseek-v4-pro', 'deepseek-v4-flash'
+    ]
     case 'baidu': return baiduModels
     case 'spark': return sparkModels
     case 'hunyuan': return hunyuanModels

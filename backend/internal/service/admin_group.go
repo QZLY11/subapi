@@ -296,6 +296,9 @@ func defaultModelsListCandidateIDs(platform string) []string {
 		return xai.DefaultModelIDs()
 	case PlatformOpenCodeGo:
 		return DefaultOpenCodeGoModelIDs()
+	case PlatformWorkBuddy:
+		// 上游目录动态拉取失败时的回退；不填会落到 default 分支返回 Claude 模型。
+		return DefaultWorkBuddyModelIDs()
 	case PlatformComposite:
 		return compositeDefaultModelsListCandidateIDs()
 	default:

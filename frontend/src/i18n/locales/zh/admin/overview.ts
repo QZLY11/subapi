@@ -917,6 +917,7 @@ export default {
         deepseek: 'DeepSeek',
         minimax: 'MiniMax',
         opencode_go: 'OpenCode',
+        workbuddy: 'WorkBuddy',
         composite: 'Composite',
       },
       saving: '保存中...',

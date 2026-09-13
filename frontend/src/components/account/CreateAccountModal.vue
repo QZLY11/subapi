@@ -160,6 +160,19 @@
             <PlatformIcon platform="grok" size="sm" />
             Grok
           </button>
+          <button
+            type="button"
+            @click="form.platform = 'workbuddy'"
+            :class="[
+              'flex flex-1 items-center justify-center gap-2 rounded-md px-4 py-2.5 text-sm font-medium transition-all',
+              form.platform === 'workbuddy'
+                ? 'bg-white text-sky-600 shadow-sm dark:bg-dark-600 dark:text-sky-400'
+                : 'text-gray-600 hover:text-gray-900 dark:text-gray-400 dark:hover:text-gray-200'
+            ]"
+          >
+            <PlatformIcon platform="workbuddy" size="sm" />
+            WorkBuddy
+          </button>
         </div>
         <!-- Multi-protocol API-key providers: Kimi / Zhipu GLM / DeepSeek / OpenCode -->
         <div class="mt-2 flex flex-wrap rounded-lg bg-gray-100 p-1 dark:bg-dark-700">
@@ -476,6 +489,24 @@
               <span class="text-xs text-gray-500 dark:text-gray-400">{{ t('admin.accounts.types.responsesApi') }}</span>
             </div>
           </button>
+        </div>
+      </div>
+
+      <!-- WorkBuddy CN（CodeBuddy）设备授权流：仅 OAuth 一种接入方式 -->
+      <div v-if="form.platform === 'workbuddy'">
+        <label class="input-label">{{ t('admin.accounts.accountType') }}</label>
+        <div class="mt-2 grid grid-cols-1 gap-3" data-tour="account-form-type">
+          <div class="flex items-center gap-3 rounded-lg border-2 border-sky-500 bg-sky-50 p-3 dark:bg-sky-900/20">
+            <div class="flex h-8 w-8 shrink-0 items-center justify-center rounded-lg bg-sky-600 text-white">
+              <PlatformIcon platform="workbuddy" size="sm" />
+            </div>
+            <div>
+              <span class="block text-sm font-medium text-gray-900 dark:text-white">OAuth</span>
+              <span class="text-xs text-gray-500 dark:text-gray-400">
+                {{ t('admin.accounts.oauth.workbuddy.step1Desc') }}
+              </span>
+            </div>
+          </div>
         </div>
       </div>
 
@@ -3536,7 +3567,17 @@
 
     <!-- Step 2: OAuth Authorization -->
     <div v-else class="space-y-5">
+      <!-- WorkBuddy 走独立的设备授权流组件（poll 型，非 redirect-callback） -->
+      <WorkBuddyOAuthFlow
+        v-if="form.platform === 'workbuddy'"
+        :name="form.name"
+        :concurrency="form.concurrency"
+        :priority="form.priority"
+        :group-ids="form.group_ids"
+        @created="handleWorkBuddyCreated"
+      />
       <OAuthAuthorizationFlow
+        v-else
         ref="oauthFlowRef"
         :add-method="form.platform === 'anthropic' ? addMethod : 'oauth'"
         :auth-url="currentAuthUrl"
@@ -3979,6 +4020,7 @@ import {
   type OpenAIWSMode
 } from '@/utils/openaiWsMode'
 import OAuthAuthorizationFlow from './OAuthAuthorizationFlow.vue'
+import WorkBuddyOAuthFlow from './WorkBuddyOAuthFlow.vue'
 
 // Type for exposed OAuthAuthorizationFlow component
 // Note: defineExpose automatically unwraps refs, so we use the unwrapped types
@@ -4818,6 +4860,9 @@ watch(
     }
     if ((form.platform === 'gemini' || form.platform === 'anthropic') && category === 'service_account') {
       form.type = 'service_account' as AccountType
+    } else if (form.platform === 'workbuddy') {
+      // WorkBuddy CN 使用专用 OAuth 账号类型（设备授权流）。
+      form.type = 'workbuddy_oauth' as AccountType
     } else if (category === 'oauth-based') {
       form.type = form.platform === 'anthropic' ? method as AccountType : 'oauth'
     } else {
@@ -4871,6 +4916,11 @@ watch(
       modelRestrictionMode.value = 'mapping'
       form.concurrency = 1
       form.load_factor = null
+    }
+    // WorkBuddy CN 仅支持 OAuth 设备授权流，固定为 oauth-based 类别。
+    if (newPlatform === 'workbuddy') {
+      accountCategory.value = 'oauth-based'
+      apiKeyBaseUrl.value = 'https://copilot.tencent.com/v2'
     }
     if (newPlatform !== 'gemini' && newPlatform !== 'anthropic' && accountCategory.value === 'service_account') {
       accountCategory.value = 'oauth-based'
@@ -5615,6 +5665,12 @@ const handleVertexServiceAccountDrop = async (event: DragEvent) => {
   const file = event.dataTransfer?.files?.[0]
   if (!file) return
   applyVertexServiceAccountJson(await file.text())
+}
+
+// WorkBuddy 设备授权流建号成功后由子组件回调：关闭弹窗并通知父组件刷新。
+const handleWorkBuddyCreated = () => {
+  emit('created')
+  handleClose()
 }
 
 const handleSubmit = async () => {

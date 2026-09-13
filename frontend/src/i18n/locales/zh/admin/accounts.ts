@@ -1303,6 +1303,36 @@ export default {
           },
           oauthOnlyHint: '首版 Grok 支持仅包含 OAuth 订阅的 Responses API 文本/推理转发。'
         },
+        // WorkBuddy CN（CodeBuddy）设备授权流
+        workbuddy: {
+          title: 'WorkBuddy 账号授权',
+          step1GenerateUrl: '生成设备授权链接',
+          step1Desc: '点击下方按钮向腾讯 CodeBuddy 申请一次性授权链接（state 有效期 5 分钟）。',
+          generateAuthUrl: '生成授权链接',
+          regenerate: '重新生成授权链接',
+          step2OpenUrl: '在浏览器中打开授权链接并登录',
+          step2Desc:
+            '授权链接有效期为 5 分钟。请在新标签页打开并完成 CodeBuddy 账号登录，本页面会自动轮询登录结果。',
+          openUrl: '打开授权链接',
+          copyUrl: '复制链接',
+          copied: '已复制',
+          waitingLogin: '等待授权完成…',
+          loginSuccess: '授权成功，已获取访问令牌',
+          step3Confirm: '确认账号信息并创建',
+          nickname: '昵称',
+          uid: '用户 ID',
+          enterpriseId: '企业 ID',
+          domain: '域名',
+          expiresAt: '令牌过期时间',
+          createAccount: '创建账号',
+          created: 'WorkBuddy 账号创建成功',
+          notice:
+            'WorkBuddy 使用 CLI 设备授权流；令牌过期后由后台自动刷新。请确保服务器可访问 copilot.tencent.com。',
+          failedToGenerateUrl: '生成 WorkBuddy 授权链接失败',
+          pollFailed: '查询 WorkBuddy 授权结果失败',
+          createFailed: '创建 WorkBuddy 账号失败',
+          copyFailed: '复制失败，请手动复制'
+        },
         // Gemini specific
         gemini: {
           title: 'Gemini 账户授权',

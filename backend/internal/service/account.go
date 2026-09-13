@@ -289,6 +289,15 @@ func (a *Account) IsMiniMax() bool {
 	return a.Platform == PlatformMiniMax
 }
 
+func (a *Account) IsWorkBuddy() bool {
+	return a != nil && a.Platform == PlatformWorkBuddy
+}
+
+// IsWorkBuddyOAuth 报告账号是否为 WorkBuddy CN 的 OAuth 账号（设备授权流）。
+func (a *Account) IsWorkBuddyOAuth() bool {
+	return a != nil && a.Platform == PlatformWorkBuddy && a.Type == AccountTypeWorkBuddyOAuth
+}
+
 // IsCNProvider 报告是否为国产 OpenAI 兼容供应商（kimi/zhipu/deepseek/minimax）。
 func (a *Account) IsCNProvider() bool {
 	return a != nil && IsCNProvider(a.Platform)
@@ -298,7 +307,7 @@ func (a *Account) IsCNProvider() bool {
 // openai/grok 原生走 OpenAI 网关；国产供应商同为 OpenAI Chat Completions
 // 兼容上游，也经 OpenAI 网关转发。OpenCode 同样经 OpenAI 网关按模型分流。
 func (a *Account) IsOpenAICompatible() bool {
-	return a != nil && (a.Platform == PlatformOpenAI || a.Platform == PlatformGrok || a.IsCNProvider() || a.IsOpenCodeGo())
+	return a != nil && (a.Platform == PlatformOpenAI || a.Platform == PlatformGrok || a.IsCNProvider() || a.IsOpenCodeGo() || a.IsWorkBuddy())
 }
 
 func (a *Account) GeminiOAuthType() string {
@@ -1346,7 +1355,7 @@ func (a *Account) IsOpenAIApiKey() bool {
 // 适用 openai、国产 OpenAI 兼容供应商（kimi/zhipu/deepseek）与 OpenCode Go；
 // grok 走 GetGrokBaseURL，此处对 grok 返回 "" 以保持原有行为。
 func (a *Account) GetOpenAIBaseURL() string {
-	if !a.IsOpenAI() && !a.IsCNProvider() && !a.IsOpenCodeGo() {
+	if !a.IsOpenAI() && !a.IsCNProvider() && !a.IsOpenCodeGo() && !a.IsWorkBuddy() {
 		return ""
 	}
 	if a.IsMultiProtocolAPIKey() && a.IsAdaptiveAPIProtocol() {
@@ -1379,6 +1388,10 @@ func (a *Account) GetOpenAIBaseURL() string {
 		return DefaultMiniMaxBaseURL
 	case PlatformOpenCodeGo:
 		return a.openCodeDefaultChatBaseURL()
+	case PlatformWorkBuddy:
+		// WorkBuddy CN 上游 base：/v2 结尾使 buildOpenAIEndpointURL 拼出
+		// /v2/chat/completions（openAIBaseURLHasVersionSuffix("/v2")==true → path += "/chat/completions"）。
+		return "https://copilot.tencent.com/v2"
 	default:
 		return "https://api.openai.com"
 	}
@@ -1751,6 +1764,10 @@ func (a *Account) GetOpenAIApiKey() string {
 func (a *Account) GetOpenAIProtocolAPIKey() string {
 	if a == nil {
 		return ""
+	}
+	if a.IsWorkBuddyOAuth() {
+		// WorkBuddy CN OAuth 账号：Bearer token 即 access_token 凭证。
+		return a.GetCredential("access_token")
 	}
 	if a.IsMultiProtocolAPIKey() {
 		if a.Type != AccountTypeAPIKey {
