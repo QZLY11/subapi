@@ -160,6 +160,9 @@ export default {
       // WorkBuddy credits & check-in (billing domain: www.codebuddy.cn)
       workbuddyCredits: {
         creditsPlaceholder: 'Credits --',
+        collapse: 'Collapse',
+        expand: 'Expand',
+        compactSummary: '{count} accounts · {size} total · {remain} left · {checkin} checked in',
         creditsTooltip: 'Read this account credit balance from the CodeBuddy billing API',
         query: 'Query',
         checkin: 'Check in',

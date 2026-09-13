@@ -1,13 +1,45 @@
 <template>
   <div
     v-if="visible"
-    class="rounded-lg border border-gray-200 bg-white p-4 dark:border-gray-700 dark:bg-gray-800"
+    class="rounded-lg border border-gray-200 bg-white dark:border-gray-700 dark:bg-gray-800"
   >
-    <div class="mb-3 flex flex-wrap items-center justify-between gap-2">
-      <h3 class="text-sm font-semibold text-gray-900 dark:text-white">
-        {{ t('admin.accounts.workbuddyCredits.summaryTitle') }}
-      </h3>
-      <div class="flex flex-wrap items-center gap-2">
+    <!-- 常驻头部：折叠开关 + 标题 + 折叠态紧凑摘要 + 操作按钮 -->
+    <div class="flex flex-wrap items-center justify-between gap-2 px-4 py-2.5">
+      <div class="flex min-w-0 flex-1 items-center gap-2">
+        <button
+          type="button"
+          data-test="workbuddy-panel-toggle"
+          class="inline-flex shrink-0 items-center justify-center rounded p-1 text-gray-500 transition-colors hover:bg-gray-100 hover:text-gray-700 dark:text-gray-400 dark:hover:bg-gray-700 dark:hover:text-gray-200"
+          :title="collapsed ? t('admin.accounts.workbuddyCredits.expand') : t('admin.accounts.workbuddyCredits.collapse')"
+          :aria-expanded="!collapsed"
+          @click="collapsed = !collapsed"
+        >
+          <svg
+            class="h-4 w-4 transition-transform"
+            :class="collapsed ? '-rotate-90' : 'rotate-0'"
+            fill="none"
+            stroke="currentColor"
+            viewBox="0 0 24 24"
+          >
+            <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M19 9l-7 7-7-7" />
+          </svg>
+        </button>
+
+        <h3 class="shrink-0 text-sm font-semibold text-gray-900 dark:text-white">
+          {{ t('admin.accounts.workbuddyCredits.summaryTitle') }}
+        </h3>
+
+        <!-- 折叠态：单行紧凑摘要，不占版面 -->
+        <span
+          v-if="collapsed && summary"
+          data-test="workbuddy-compact-summary"
+          class="truncate text-[11px] text-gray-500 dark:text-gray-400"
+        >
+          {{ compactSummary }}
+        </span>
+      </div>
+
+      <div class="flex shrink-0 items-center gap-2">
         <button
           type="button"
           data-test="workbuddy-summary-refresh"
@@ -62,49 +94,52 @@
       </div>
     </div>
 
-    <!-- Four headline stats: accounts / total credits / remaining / checked in today -->
-    <div class="grid grid-cols-2 gap-3 sm:grid-cols-4">
-      <div
-        v-for="stat in stats"
-        :key="stat.key"
-        :data-test="`workbuddy-stat-${stat.key}`"
-        class="rounded-md bg-gray-50 px-3 py-2 dark:bg-gray-900/40"
-      >
-        <div class="text-[11px] text-gray-500 dark:text-gray-400">{{ stat.label }}</div>
-        <div class="mt-0.5 text-base font-semibold text-gray-900 dark:text-white">
-          {{ stat.value }}
+    <!-- 可折叠正文 -->
+    <div v-show="!collapsed" class="border-t border-gray-100 px-4 pb-4 pt-3 dark:border-gray-700">
+      <!-- Four headline stats: accounts / total credits / remaining / checked in today -->
+      <div class="grid grid-cols-2 gap-3 sm:grid-cols-4">
+        <div
+          v-for="stat in stats"
+          :key="stat.key"
+          :data-test="`workbuddy-stat-${stat.key}`"
+          class="rounded-md bg-gray-50 px-3 py-2 dark:bg-gray-900/40"
+        >
+          <div class="text-[11px] text-gray-500 dark:text-gray-400">{{ stat.label }}</div>
+          <div class="mt-0.5 text-base font-semibold text-gray-900 dark:text-white">
+            {{ stat.value }}
+          </div>
         </div>
       </div>
-    </div>
 
-    <!-- Remaining credits ratio bar -->
-    <div v-if="summary && summary.total_size > 0" class="mt-3">
-      <div class="mb-1 flex justify-between text-[11px] text-gray-500 dark:text-gray-400">
-        <span>{{ t('admin.accounts.workbuddyCredits.totalRemain') }}</span>
-        <span>{{ percentRemainLabel }}</span>
+      <!-- Remaining credits ratio bar -->
+      <div v-if="summary && summary.total_size > 0" class="mt-3">
+        <div class="mb-1 flex justify-between text-[11px] text-gray-500 dark:text-gray-400">
+          <span>{{ t('admin.accounts.workbuddyCredits.totalRemain') }}</span>
+          <span>{{ percentRemainLabel }}</span>
+        </div>
+        <div class="h-1.5 w-full overflow-hidden rounded-full bg-gray-200 dark:bg-gray-700">
+          <div
+            class="h-full rounded-full bg-emerald-500 transition-all"
+            :style="{ width: `${remainPercent}%` }"
+          />
+        </div>
       </div>
-      <div class="h-1.5 w-full overflow-hidden rounded-full bg-gray-200 dark:bg-gray-700">
-        <div
-          class="h-full rounded-full bg-emerald-500 transition-all"
-          :style="{ width: `${remainPercent}%` }"
-        />
-      </div>
-    </div>
 
-    <div v-if="error" class="mt-3 text-xs text-red-600 dark:text-red-400">{{ error }}</div>
-    <div
-      v-if="checkinMessage"
-      class="mt-3 text-xs text-emerald-700 dark:text-emerald-400"
-      data-test="workbuddy-checkin-message"
-    >
-      {{ checkinMessage }}
-    </div>
-    <div
-      v-if="summary?.today_checkin_date"
-      class="mt-2 text-[11px] text-gray-400 dark:text-gray-500"
-    >
-      {{ t('admin.accounts.workbuddyCredits.todayCheckin') }} ·
-      {{ summary.today_checkin_date }}
+      <div v-if="error" class="mt-3 text-xs text-red-600 dark:text-red-400">{{ error }}</div>
+      <div
+        v-if="checkinMessage"
+        class="mt-3 text-xs text-emerald-700 dark:text-emerald-400"
+        data-test="workbuddy-checkin-message"
+      >
+        {{ checkinMessage }}
+      </div>
+      <div
+        v-if="summary?.today_checkin_date"
+        class="mt-2 text-[11px] text-gray-400 dark:text-gray-500"
+      >
+        {{ t('admin.accounts.workbuddyCredits.todayCheckin') }} ·
+        {{ summary.today_checkin_date }}
+      </div>
     </div>
   </div>
 </template>
@@ -116,6 +151,9 @@ import { adminAPI } from '@/api/admin'
 import type { WorkBuddyCreditsSummary } from '@/api/admin/workbuddy'
 
 const { t } = useI18n()
+
+// 默认折叠，避免占用列表空间遮挡其他账号。
+const collapsed = ref(true)
 
 const loading = ref(false)
 const checkinRunning = ref(false)
@@ -157,6 +195,18 @@ const stats = computed(() => [
       : '--'
   }
 ])
+
+/** 折叠态单行摘要：账号数 / 总积分 / 剩余 / 已签。 */
+const compactSummary = computed(() => {
+  const s = summary.value
+  if (!s) return ''
+  return t('admin.accounts.workbuddyCredits.compactSummary', {
+    count: accountCount.value,
+    size: formatCredits(s.total_size),
+    remain: formatCredits(s.total_remain),
+    checkin: `${s.today_checkin_count}/${accountCount.value}`
+  })
+})
 
 const remainPercent = computed(() => {
   const s = summary.value
@@ -208,6 +258,8 @@ const handleCheckinAll = async () => {
     } else {
       await loadSummary()
     }
+    // 签到后自动展开，展示结果与最新统计。
+    collapsed.value = false
   } catch (e) {
     error.value = extractErrorMessage(e) || t('admin.accounts.workbuddyCredits.checkinFailed')
   } finally {

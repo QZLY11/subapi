@@ -363,6 +363,9 @@ export default {
       // WorkBuddy 积分与签到（billing 域：www.codebuddy.cn）
       workbuddyCredits: {
         creditsPlaceholder: '积分 --',
+        collapse: '收起',
+        expand: '展开',
+        compactSummary: '{count} 个账号 · 总 {size} · 剩 {remain} · 已签 {checkin}',
         creditsTooltip: '从 CodeBuddy billing 接口读取该账号的积分余额',
         query: '查积分',
         checkin: '签到',
