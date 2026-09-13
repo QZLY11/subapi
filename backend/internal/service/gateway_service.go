@@ -1411,6 +1411,20 @@ func (s *GatewayService) GetAvailableModels(ctx context.Context, groupID *int64,
 		accounts = filtered
 	}
 
+	// WorkBuddy CN：优先动态拉取上游模型目录，失败回落静态目录。
+	// 静态目录在模型快速迭代下会滞后（如 hy3-preview 已下线、glm-5.3/hy3-x 已上线），
+	// 动态拉取才能对齐上游真实可用模型，避免 /v1/models 与上游目录不一致。
+	if platform == PlatformWorkBuddy {
+		if live := s.fetchWorkBuddyGroupModels(ctx, accounts); len(live) > 0 {
+			if s.modelsListCache != nil {
+				s.modelsListCache.Set(cacheKey, cloneStringSlice(live), s.modelsListCacheTTL)
+				modelsListCacheStoreTotal.Add(1)
+			}
+			return cloneStringSlice(live)
+		}
+		return nil
+	}
+
 	// Collect unique models from all accounts
 	modelSet := make(map[string]struct{})
 	hasAnyMapping := false
@@ -1461,6 +1475,59 @@ func (s *GatewayService) GetAvailableModels(ctx context.Context, groupID *int64,
 		modelsListCacheStoreTotal.Add(1)
 	}
 	return cloneStringSlice(models)
+}
+
+// fetchWorkBuddyGroupModels 从 WorkBuddy CN 上游动态拉取模型目录（/console/enterprises/personal/models）。
+// 选用组内第一个带 access_token 的 WorkBuddy 账号；任何一步失败返回 nil，由调用方回落静态目录。
+// 与 AccountTestService.fetchUpstreamModelList 的 workbuddy 分支保持同一请求形态：
+// GET + Bearer access_token + applyWorkBuddyUpstreamHeaders + 账号级头覆写。
+func (s *GatewayService) fetchWorkBuddyGroupModels(ctx context.Context, accounts []Account) []string {
+	if s == nil || s.httpUpstream == nil {
+		return nil
+	}
+	var acc *Account
+	for i := range accounts {
+		if accounts[i].IsWorkBuddy() && strings.TrimSpace(accounts[i].GetCredential("access_token")) != "" {
+			acc = &accounts[i]
+			break
+		}
+	}
+	if acc == nil {
+		return nil
+	}
+
+	accessToken := strings.TrimSpace(acc.GetCredential("access_token"))
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, wbUpstreamBaseCN+wbModelsPath, nil)
+	if err != nil {
+		return nil
+	}
+	req.Header.Set("Accept", "application/json")
+	req.Header.Set("Authorization", "Bearer "+accessToken)
+	applyWorkBuddyUpstreamHeaders(req.Header, acc)
+	acc.ApplyHeaderOverrides(req.Header)
+
+	proxyURL := ""
+	if acc.ProxyID != nil && acc.Proxy != nil {
+		proxyURL = acc.Proxy.URL()
+	}
+	resp, err := s.httpUpstream.Do(req, proxyURL, acc.ID, acc.Concurrency)
+	if err != nil {
+		return nil
+	}
+	defer func() { _ = resp.Body.Close() }()
+
+	body, err := io.ReadAll(io.LimitReader(resp.Body, 4<<20))
+	if err != nil {
+		return nil
+	}
+	if resp.StatusCode < http.StatusOK || resp.StatusCode >= http.StatusMultipleChoices {
+		return nil
+	}
+	models, err := extractWorkBuddyUpstreamModelIDs(body)
+	if err != nil {
+		return nil
+	}
+	return models
 }
 
 func (s *GatewayService) resolveCompositeModelOwnership(ctx context.Context, groupID int64, model string) (CompositeModelOwnership, error) {

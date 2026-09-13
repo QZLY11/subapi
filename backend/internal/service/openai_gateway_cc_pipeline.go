@@ -232,6 +232,34 @@ func (s *OpenAIGatewayService) sendCCUpstreamRequest(
 	account.ApplyHeaderOverrides(upstreamReq.Header)
 	applyOpenCodeSessionHeader(c, account, targetURL, upstreamReq.Header, body)
 
+	if account.IsWorkBuddy() {
+		// TODO(debug): 临时排查 workbuddy chat 转发 401，确认最终上游请求形态。定位后删除。
+		bodyPreview := string(body)
+		if len(bodyPreview) > 400 {
+			bodyPreview = bodyPreview[:400]
+		}
+		authPrefix := bearerToken
+		if len(authPrefix) > 20 {
+			authPrefix = authPrefix[:20]
+		}
+		logger.L().Warn("workbuddy_upstream_debug",
+			zap.Int64("account_id", account.ID),
+			zap.String("url", targetURL),
+			zap.String("user_agent", upstreamReq.Header.Get("User-Agent")),
+			zap.String("x_user_id", upstreamReq.Header.Get("X-User-Id")),
+			zap.String("x_enterprise_id", upstreamReq.Header.Get("X-Enterprise-Id")),
+			zap.String("x_tenant_id", upstreamReq.Header.Get("X-Tenant-Id")),
+			zap.String("x_domain", upstreamReq.Header.Get("X-Domain")),
+			zap.String("x_device_token", upstreamReq.Header.Get("X-Device-Token")),
+			zap.String("origin", upstreamReq.Header.Get("Origin")),
+			zap.String("referer", upstreamReq.Header.Get("Referer")),
+			zap.String("accept", upstreamReq.Header.Get("Accept")),
+			zap.String("content_type", upstreamReq.Header.Get("Content-Type")),
+			zap.String("auth_prefix", authPrefix),
+			zap.String("body", bodyPreview),
+		)
+	}
+
 	proxyURL := ""
 	if account.ProxyID != nil && account.Proxy != nil {
 		proxyURL = account.Proxy.URL()
