@@ -95,6 +95,14 @@ func (s *OpenAIGatewayService) forwardAsChatCompletions(
 		return nil, errors.New("codex_cli_only restriction: only codex official clients are allowed")
 	}
 
+	// WorkBuddy CN（CodeBuddy）上游只有 /v2/chat/completions，没有 Responses 端点。
+	// 必须走 raw Chat Completions 直转：sendCCUpstreamRequest 内会做 body 改写
+	// （强制 stream / tool_choice 归一化 / developer→system）并补身份头
+	// （X-User-Id/Origin/Referer/UA），否则缺身份头上游返回 401。
+	if account.IsWorkBuddy() {
+		return s.forwardAsRawChatCompletions(ctx, c, account, body, defaultMappedModel)
+	}
+
 	if account.Platform == PlatformGrok {
 		if account.IsGrokOAuth() {
 			if eligible, reason := grokChatResponsesBridgeEligibility(body); eligible {
