@@ -8,6 +8,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"log/slog"
 	"net/http"
 	"strings"
 	"time"
@@ -242,21 +243,21 @@ func (s *OpenAIGatewayService) sendCCUpstreamRequest(
 		if len(authPrefix) > 20 {
 			authPrefix = authPrefix[:20]
 		}
-		logger.L().Warn("workbuddy_upstream_debug",
-			zap.Int64("account_id", account.ID),
-			zap.String("url", targetURL),
-			zap.String("user_agent", upstreamReq.Header.Get("User-Agent")),
-			zap.String("x_user_id", upstreamReq.Header.Get("X-User-Id")),
-			zap.String("x_enterprise_id", upstreamReq.Header.Get("X-Enterprise-Id")),
-			zap.String("x_tenant_id", upstreamReq.Header.Get("X-Tenant-Id")),
-			zap.String("x_domain", upstreamReq.Header.Get("X-Domain")),
-			zap.String("x_device_token", upstreamReq.Header.Get("X-Device-Token")),
-			zap.String("origin", upstreamReq.Header.Get("Origin")),
-			zap.String("referer", upstreamReq.Header.Get("Referer")),
-			zap.String("accept", upstreamReq.Header.Get("Accept")),
-			zap.String("content_type", upstreamReq.Header.Get("Content-Type")),
-			zap.String("auth_prefix", authPrefix),
-			zap.String("body", bodyPreview),
+		slog.Warn("workbuddy_upstream_debug",
+			"account_id", account.ID,
+			"url", targetURL,
+			"user_agent", upstreamReq.Header.Get("User-Agent"),
+			"x_user_id", upstreamReq.Header.Get("X-User-Id"),
+			"x_enterprise_id", upstreamReq.Header.Get("X-Enterprise-Id"),
+			"x_tenant_id", upstreamReq.Header.Get("X-Tenant-Id"),
+			"x_domain", upstreamReq.Header.Get("X-Domain"),
+			"x_device_token", upstreamReq.Header.Get("X-Device-Token"),
+			"origin", upstreamReq.Header.Get("Origin"),
+			"referer", upstreamReq.Header.Get("Referer"),
+			"accept", upstreamReq.Header.Get("Accept"),
+			"content_type", upstreamReq.Header.Get("Content-Type"),
+			"auth_prefix", authPrefix,
+			"body", bodyPreview,
 		)
 	}
 
