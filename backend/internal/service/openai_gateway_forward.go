@@ -1344,7 +1344,17 @@ func (s *OpenAIGatewayService) Forward(ctx context.Context, c *gin.Context, acco
 }
 
 func shouldForwardOpenAIResponsesViaRawChatCompletions(account *Account) bool {
-	if account == nil || account.Type != AccountTypeAPIKey {
+	if account == nil {
+		return false
+	}
+	// WorkBuddy CN（CodeBuddy）上游只有 /v2/chat/completions，无 Responses 端点。
+	// 所有 OpenAI 网关入口（chat completions / responses / messages）都必须直转
+	// raw Chat Completions，由 sendCCUpstreamRequest 做 body 改写 + 身份头注入，
+	// 否则缺身份头上游返回 401 "not from a valid issuer"。
+	if account.IsWorkBuddy() {
+		return true
+	}
+	if account.Type != AccountTypeAPIKey {
 		return false
 	}
 	if account.IsOpenCodeGo() {

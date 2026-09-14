@@ -445,7 +445,9 @@ func (s *RateLimitService) HandleUpstreamError(ctx context.Context, account *Acc
 			break
 		}
 		// OAuth 账号在 401 错误时临时不可调度（给 token 刷新窗口）；非 OAuth 账号保持原有 SetError 行为。
-		if authAccount.Type == AccountTypeOAuth {
+		// WorkBuddy CN（AccountTypeWorkBuddyOAuth）同为 OAuth 设备授权流、带 refresh_token，
+		// 401 应走同一临时冷却 + 后台刷新恢复路径，否则会被误判为非 OAuth 永久禁用。
+		if authAccount.Type == AccountTypeOAuth || authAccount.IsWorkBuddyOAuth() {
 			// 1. 失效缓存
 			if s.tokenCacheInvalidator != nil {
 				if err := s.tokenCacheInvalidator.InvalidateToken(ctx, authAccount); err != nil {
