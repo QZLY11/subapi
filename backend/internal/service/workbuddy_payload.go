@@ -36,6 +36,7 @@ func PrepareWorkBuddyChatPayload(src []byte) []byte {
 	obj["stream"] = true
 	normalizeWorkBuddyToolChoice(obj)
 	normalizeWorkBuddyRoles(obj)
+	normalizeWorkBuddyArrayContent(obj)
 	// 顺序敏感：注入的默认档也要走降级管线（模型不支持默认档时落到 ≤ 默认档的
 	// 最高支持档，保证不出站不合规档位）。
 	injectWorkBuddyThinking(obj)
@@ -66,6 +67,55 @@ func normalizeWorkBuddyRoles(obj map[string]any) {
 		if strings.EqualFold(strings.TrimSpace(role), "developer") {
 			msg["role"] = "system"
 		}
+	}
+}
+
+// normalizeWorkBuddyArrayContent 把 messages[].content 为数组（Anthropic 风格
+// content blocks）的请求归一为纯字符串 content。ccswitch / Claude Code 等客户端
+// 走 /v1/chat/completions 时会发 OpenAI 顶层结构 + Anthropic content 数组的混合
+// body（例如 user 消息 content = [{"type":"text","text":"..."}]），腾讯
+// /v2/chat/completions 严格按 OpenAI 协议解析，content 数组会触发 400
+// （code=11101 "unsupported content type" / 11128 "unapproved channel"）。
+//
+// 折叠规则（对齐 apicompat.AnthropicToChatCompletionsRequest 的 array→string）：
+//   - text 块：拼接为单个字符串，以 "\n\n" 分隔
+//   - tool_use 块：转为 assistant tool_calls（罕见，安当前仅防御式跳过）
+//   - image / 其他未知块：跳过（不在文本通道强塞，避免二次 400）
+//   - 全部块都不是 text（空）时：内容设为空字符串
+func normalizeWorkBuddyArrayContent(obj map[string]any) {
+	msgs, ok := obj["messages"].([]any)
+	if !ok {
+		return
+	}
+	for _, m := range msgs {
+		msg, ok := m.(map[string]any)
+		if !ok {
+			continue
+		}
+		content, ok := msg["content"]
+		if !ok {
+			continue
+		}
+		blocks, isArray := content.([]any)
+		if !isArray {
+			continue
+		}
+		var parts []string
+		for _, b := range blocks {
+			blk, ok := b.(map[string]any)
+			if !ok {
+				continue
+			}
+			typ, _ := blk["type"].(string)
+			if typ == "text" {
+				if t, ok := blk["text"].(string); ok && strings.TrimSpace(t) != "" {
+					parts = append(parts, t)
+				}
+			}
+			// 其他类型（tool_use/tool_result/image/thinking）不并入文本通道，
+			// 避免把结构化对象拼进 content 造成上游二次 400。
+		}
+		msg["content"] = strings.Join(parts, "\n\n")
 	}
 }
 
