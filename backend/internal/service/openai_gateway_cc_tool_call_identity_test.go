@@ -41,6 +41,36 @@ func TestStripEmptyChatToolCallIdentity_FollowingDelta(t *testing.T) {
 	require.NotContains(t, string(rewritten), `"name":""`)
 }
 
+// TestStripEmptyChatToolCallIdentity_LegacyFunctionCallEmptyName 覆盖
+// WorkBuddy 上游真实抓包形态：工具调用走遗留的 delta.function_call 字段，
+// 首包带合法 name，后续包把 name 发成空串。
+//
+// 空 name 会覆盖客户端已缓存的合法函数名，客户端最终得到 name=""，
+// 抛 ToolNotFoundError: unknown tool "" 并直接终止会话——表现为
+// 「回复一句话之后会话突然中断」。这是用户实际报告的断连根因。
+func TestStripEmptyChatToolCallIdentity_LegacyFunctionCallEmptyName(t *testing.T) {
+	// 首包：合法 name，必须原样保留。
+	first := []byte(`{"id":"cmb-x","object":"chat.completion.chunk","choices":[{"index":0,"delta":{"content":"","reasoning_content":"","function_call":{"name":"write_file","arguments":"{"},"tool_calls":[],"extra":1}}]}`)
+	rewritten, changed := stripEmptyChatToolCallIdentity(first)
+	require.False(t, changed, "首包合法 name 不得被改写")
+	require.Equal(t, string(first), string(rewritten))
+
+	// 后续包：空 name，必须被剔除，且 arguments 碎片保留。
+	follow := []byte(`{"id":"cmb-x","object":"chat.completion.chunk","choices":[{"index":0,"delta":{"content":"","reasoning_content":"","function_call":{"name":"","arguments":"\"path\":"},"tool_calls":[],"extra":1}}]}`)
+	rewritten, changed = stripEmptyChatToolCallIdentity(follow)
+	require.True(t, changed, "空 function_call.name 必须被剔除")
+	require.False(t, gjson.GetBytes(rewritten, "choices.0.delta.function_call.name").Exists(),
+		"空 name 必须整字段删除（缺失才不会覆盖客户端缓存）")
+	require.Equal(t, `"path":`, gjson.GetBytes(rewritten, "choices.0.delta.function_call.arguments").String())
+	require.NotContains(t, string(rewritten), `"name":""`)
+
+	// 非空 name 的后续包不得被改动。
+	named := []byte(`{"id":"cmb-x","choices":[{"index":0,"delta":{"function_call":{"name":"write_file","arguments":"x"}}}]}`)
+	rewritten, changed = stripEmptyChatToolCallIdentity(named)
+	require.False(t, changed)
+	require.Equal(t, "write_file", gjson.GetBytes(rewritten, "choices.0.delta.function_call.name").String())
+}
+
 // TestStripEmptyChatToolCallIdentity_OnlyEmptyName / _OnlyEmptyID 只删
 // 空的那一个，非空字段必须保留。
 func TestStripEmptyChatToolCallIdentity_OnlyEmptyName(t *testing.T) {

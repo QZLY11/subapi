@@ -48,15 +48,23 @@ func stripEmptyChatToolCallIdentityFromSSELine(line string) string {
 // function.name 字段；arguments（即使是空串）、index、type 与其它字段
 // 一律保留，非空 id/name 不动。多 choice、多 index 都会处理。
 //
-// 返回 (原始 payload, false) 当：payload 为空、不含 "tool_calls"、
-// 非法 JSON、无 choices / delta / tool_calls 数组、或没有需要删除的
-// 字段。sjson 删除失败时 fail-closed 返回原始 payload。
+// 同时处理遗留的 choices[*].delta.function_call 形态：WorkBuddy 上游在
+// 拆包发送工具调用时会先发 {"function_call":{"name":"<真实名>","arguments":"{"}}，
+// 随后在同一次流里再补发 {"function_call":{"name":"","arguments":"..."}}。
+// 空 name 会覆盖客户端已缓存的合法函数名，客户端最终解析出 name=""，
+// 抛 ToolNotFoundError: unknown tool "" 并直接终止会话——现象就是
+// 「回复一句话之后会话突然中断」。该形态与 tool_calls 同源，必须一并剔除。
+//
+// 返回 (原始 payload, false) 当：payload 为空、不含 "tool_calls" /
+// "function_call"、非法 JSON、无 choices / delta / tool_calls 数组、或
+// 没有需要删除的字段。sjson 删除失败时 fail-closed 返回原始 payload。
 func stripEmptyChatToolCallIdentity(payload []byte) ([]byte, bool) {
 	if len(payload) == 0 {
 		return payload, false
 	}
-	// 热路径快速失败：绝大多数 chunk 没有 tool_calls。
-	if !bytes.Contains(payload, []byte("tool_calls")) {
+	// 热路径快速失败：绝大多数 chunk 既无 tool_calls 也无 function_call。
+	if !bytes.Contains(payload, []byte("tool_calls")) &&
+		!bytes.Contains(payload, []byte("function_call")) {
 		return payload, false
 	}
 	if !gjson.ValidBytes(payload) {
@@ -72,6 +80,15 @@ func stripEmptyChatToolCallIdentity(payload []byte) ([]byte, bool) {
 		delta := choice.Get("delta")
 		if !delta.Exists() || !delta.IsObject() {
 			continue
+		}
+		// 遗留形态：delta.function_call 上的空 name。
+		if name := delta.Get("function_call.name"); name.Exists() && name.Type == gjson.String && name.Str == "" {
+			next, err := sjson.DeleteBytes(updated, "choices."+strconv.Itoa(ci)+".delta.function_call.name")
+			if err != nil {
+				return payload, false
+			}
+			updated = next
+			changed = true
 		}
 		toolCalls := delta.Get("tool_calls")
 		if !toolCalls.Exists() || !toolCalls.IsArray() {
