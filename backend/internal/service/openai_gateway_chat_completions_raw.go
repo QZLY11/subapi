@@ -327,8 +327,8 @@ func (s *OpenAIGatewayService) streamRawChatCompletions(
 		}
 	}
 
-	for scanner.Scan() {
-		line := scanner.Text()
+	// handleLine 处理单行上游 SSE：统计 usage/首 token、改写后写往客户端。
+	handleLine := func(line string) {
 		refusalDetector.ObserveSSELine(line)
 		if payload, ok := extractOpenAISSEDataLine(line); ok {
 			trimmedPayload := strings.TrimSpace(payload)
@@ -353,10 +353,94 @@ func (s *OpenAIGatewayService) streamRawChatCompletions(
 			if !clientDisconnected && clientOutputStarted {
 				c.Writer.Flush()
 			}
-			continue
+			return
 		}
 		if !clientDisconnected && clientOutputStarted {
 			c.Writer.Flush()
+		}
+	}
+
+	// 下游 keepalive：本路径此前只在上游真实发字节时才写客户端；上游在模型
+	// 思考/分段生成之间静默时，下游长时间零字节，会被客户端（Claude Code 等）
+	// 或中间代理/隧道按空闲超时断开，表现为「回复到一半突然断开且无报错」。
+	// 这里补齐与 forwardAsChatCompletions 一致的 SSE 注释行保活。
+	keepaliveInterval := time.Duration(0)
+	if s.cfg != nil && s.cfg.Gateway.StreamKeepaliveInterval > 0 {
+		keepaliveInterval = time.Duration(s.cfg.Gateway.StreamKeepaliveInterval) * time.Second
+	}
+
+	if keepaliveInterval <= 0 {
+		// 未启用 keepalive：保持原有同步直读路径，行为完全不变。
+		for scanner.Scan() {
+			handleLine(scanner.Text())
+		}
+	} else {
+		type ccScanEvent struct {
+			line string
+			err  error
+		}
+		events := make(chan ccScanEvent, 16)
+		done := make(chan struct{})
+		sendEvent := func(ev ccScanEvent) bool {
+			select {
+			case events <- ev:
+				return true
+			case <-done:
+				return false
+			}
+		}
+		go func() {
+			defer close(events)
+			for scanner.Scan() {
+				if !sendEvent(ccScanEvent{line: scanner.Text()}) {
+					return
+				}
+			}
+			if err := scanner.Err(); err != nil {
+				_ = sendEvent(ccScanEvent{err: err})
+			}
+		}()
+		defer close(done)
+
+		keepaliveTicker := time.NewTicker(keepaliveInterval)
+		defer keepaliveTicker.Stop()
+		lastDataAt := time.Now()
+		streamDone := false
+
+		for !streamDone {
+			select {
+			case ev, ok := <-events:
+				if !ok || ev.err != nil {
+					// 读错误交由下方 scanner.Err() 统一分类处理，与同步路径一致。
+					streamDone = true
+					break
+				}
+				lastDataAt = time.Now()
+				handleLine(ev.line)
+			case <-keepaliveTicker.C:
+				if clientDisconnected {
+					continue
+				}
+				// 静默拒绝检测尚未释放缓冲时不能提前写响应头，否则会破坏
+				// 「空响应可透明 failover」的既有语义。
+				if refusalDetector.Enabled() && !clientOutputStarted {
+					continue
+				}
+				if time.Since(lastDataAt) < keepaliveInterval {
+					continue
+				}
+				writeStreamHeaders()
+				if _, werr := fmt.Fprint(c.Writer, ":\n\n"); werr != nil {
+					clientDisconnected = true
+					logger.L().Debug("openai chat_completions raw: client disconnected during keepalive, continuing to drain upstream for billing",
+						zap.Error(werr),
+						zap.String("request_id", requestID),
+					)
+					continue
+				}
+				c.Writer.Flush()
+				lastDataAt = time.Now()
+			}
 		}
 	}
 

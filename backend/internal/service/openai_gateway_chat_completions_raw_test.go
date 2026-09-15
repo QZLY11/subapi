@@ -1240,3 +1240,84 @@ func largeRawChatCompletionsBody() []byte {
 		strings.Repeat("x", openAISilentRefusalMinRequestBodyBytes) +
 		`"}],"stream":true}`)
 }
+
+// TestRawChatCompletions_KeepaliveDuringUpstreamSilence 验证 CC 直转路径在上游
+// 静默期间会向下游发送 SSE 注释行 keepalive。
+//
+// 背景：workbuddy（WorkBuddy CN）等账号被 router 强制走 forwardAsRawChatCompletions。
+// 该路径此前只在上游真实发字节时才写客户端，上游在模型思考/分段生成之间静默时
+// 下游长时间零字节，会被 Claude Code 客户端或中间隧道按空闲超时断开，表现为
+// 「回复到一半突然断开且无报错」。此测试锁死 keepalive 行为防回归。
+func TestRawChatCompletions_KeepaliveDuringUpstreamSilence(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+
+	body := []byte(`{"model":"gpt-5.4","messages":[{"role":"user","content":"hello"}],"stream":true}`)
+	rec := httptest.NewRecorder()
+	c, _ := gin.CreateTestContext(rec)
+	c.Request = httptest.NewRequest(http.MethodPost, "/v1/chat/completions", bytes.NewReader(body))
+	c.Request.Header.Set("Content-Type", "application/json")
+
+	// 用 io.Pipe 造一个「首帧之后长时间静默」的上游流。
+	pr, pw := io.Pipe()
+	go func() {
+		defer func() { _ = pw.Close() }()
+		_, _ = pw.Write([]byte(`data: {"id":"c1","object":"chat.completion.chunk","model":"gpt-5.4","choices":[{"index":0,"delta":{"content":"hi"}}]}` + "\n\n"))
+		// 静默 3 个 keepalive 周期（间隔 1s），期间下游应收到保活注释行。
+		time.Sleep(3 * time.Second)
+		_, _ = pw.Write([]byte("data: [DONE]\n\n"))
+	}()
+
+	upstream := &httpUpstreamRecorder{resp: &http.Response{
+		StatusCode: http.StatusOK,
+		Header:     http.Header{"Content-Type": []string{"text/event-stream"}, "x-request-id": []string{"rid_raw_keepalive"}},
+		Body:       pr,
+	}}
+
+	cfg := rawChatCompletionsTestConfig()
+	cfg.Gateway = config.GatewayConfig{MaxLineSize: defaultMaxLineSize, StreamKeepaliveInterval: 1}
+	svc := &OpenAIGatewayService{cfg: cfg, httpUpstream: upstream}
+
+	_, err := svc.forwardAsRawChatCompletions(context.Background(), c, rawChatCompletionsTestAccount(), body, "")
+	require.NoError(t, err)
+
+	out := rec.Body.String()
+	require.Contains(t, out, "data: [DONE]")
+	require.Contains(t, out, `"content":"hi"`)
+	// SSE 注释行即保活信号（":" 开头），必须出现在静默期内。
+	require.Contains(t, out, ":\n\n", "upstream 静默期间必须下发 SSE 注释行 keepalive")
+}
+
+// TestRawChatCompletions_NoKeepaliveWhenIntervalZero 验证 interval=0 时保持
+// 原有同步直读路径，不下发 keepalive（配置语义为禁用）。
+func TestRawChatCompletions_NoKeepaliveWhenIntervalZero(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+
+	body := []byte(`{"model":"gpt-5.4","messages":[{"role":"user","content":"hello"}],"stream":true}`)
+	rec := httptest.NewRecorder()
+	c, _ := gin.CreateTestContext(rec)
+	c.Request = httptest.NewRequest(http.MethodPost, "/v1/chat/completions", bytes.NewReader(body))
+	c.Request.Header.Set("Content-Type", "application/json")
+
+	upstreamBody := strings.Join([]string{
+		`data: {"id":"c1","object":"chat.completion.chunk","model":"gpt-5.4","choices":[{"index":0,"delta":{"content":"ok"}}]}`,
+		"",
+		"data: [DONE]",
+		"",
+	}, "\n")
+	upstream := &httpUpstreamRecorder{resp: &http.Response{
+		StatusCode: http.StatusOK,
+		Header:     http.Header{"Content-Type": []string{"text/event-stream"}, "x-request-id": []string{"rid_raw_nokeepalive"}},
+		Body:       io.NopCloser(strings.NewReader(upstreamBody)),
+	}}
+
+	cfg := rawChatCompletionsTestConfig()
+	cfg.Gateway = config.GatewayConfig{MaxLineSize: defaultMaxLineSize, StreamKeepaliveInterval: 0}
+	svc := &OpenAIGatewayService{cfg: cfg, httpUpstream: upstream}
+
+	_, err := svc.forwardAsRawChatCompletions(context.Background(), c, rawChatCompletionsTestAccount(), body, "")
+	require.NoError(t, err)
+
+	out := rec.Body.String()
+	require.Contains(t, out, "data: [DONE]")
+	require.NotContains(t, out, ":\n\n")
+}
