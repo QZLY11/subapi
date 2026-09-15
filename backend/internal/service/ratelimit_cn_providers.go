@@ -68,7 +68,20 @@ func cnProviderResponseIndicatesInsufficientBalance(body []byte) bool {
 		return false
 	}
 	s := strings.ToLower(string(body))
+	// WorkBuddy 额度耗尽返回 {"code":14018,"msg":"额度已用尽，请访问以下链接，购买加量包…"}，
+	// HTTP 状态码为 429，与软限流不可区分，必须靠业务码 + 文案双通道识别。
+	if strings.Contains(string(body), `"code":14018`) || strings.Contains(string(body), `"code": 14018`) {
+		return true
+	}
 	return strings.Contains(s, "余额不足") ||
+		strings.Contains(s, "额度不足") ||
+		strings.Contains(s, "额度已用尽") ||
+		strings.Contains(s, "额度用尽") ||
+		strings.Contains(s, "额度已耗尽") ||
+		strings.Contains(s, "额度耗尽") ||
+		strings.Contains(s, "积分不足") ||
+		strings.Contains(s, "积分用完") ||
+		strings.Contains(s, "购买加量包") ||
 		strings.Contains(s, "insufficient balance") ||
 		strings.Contains(s, "insufficient_credit") ||
 		strings.Contains(s, "balance is not enough") ||
@@ -189,7 +202,7 @@ func (s *RateLimitService) applyCNProviderReactive429(
 		}
 		return false
 	}
-	if !account.IsCNProvider() {
+	if !account.IsCNProvider() && !account.IsWorkBuddyOAuth() && account.Platform != PlatformWorkBuddy {
 		return false
 	}
 	// 1) 余额不足文案：可恢复临时停调（含智谱 payg 这类无余额端点的场景）。

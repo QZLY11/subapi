@@ -104,12 +104,29 @@ func (k WorkBuddyErrKind) String() string {
 }
 
 // 余额不足关键词（小写 + 中文原文双通道）。
+//
+// 中文枚举必须覆盖上游真实文案的全部变体：WorkBuddy 在额度耗尽时返回
+// 「额度已用尽」（429 + code 14018），早期只收录了「额度用尽」，
+// strings.Contains("额度已用尽", "额度用尽") 为 false，导致该响应被
+// 落到 status==429 分支误判为 WBErrSoftRate，只进入 5 秒短冷却 ——
+// 坏账号随即复活、再次被调度、再次 429，形成「回复一句就断」的循环。
 var wbHardMarkers = []string{
 	"insufficient credit", "no credit", "credit exhausted", "out of credit",
 	"quota exceeded", "quota exhaust", "payment required", "credit not enough",
 	"not enough credit",
-	"积分不足", "额度不足", "余额不足", "积分用完", "额度用尽", "没有积分",
+	"积分不足", "额度不足", "余额不足", "积分用完", "没有积分",
+	// 上游实际文案变体（含「已/已经/全部」等插入字），逐一收录以避免
+	// 因一字之差退化到软限流分支。
+	"额度用尽", "额度已用尽", "额度已耗尽", "额度耗尽", "额度用完", "额度已用完",
+	"余额已用尽", "余额耗尽", "积分已用完", "积分耗尽",
+	"quota has been used up", "quota used up", "quota is exhausted",
+	"credit has been used up", "insufficient credits",
+	"购买加量包",
 }
+
+// 余额不足业务码。上游在额度耗尽时返回 HTTP 429 但 body 携带
+// {"code":14018}，状态码本身与软限流不可区分，必须依赖业务码兜底。
+var wbHardCreditCodes = []string{`"code":14018`, `"code": 14018`}
 
 // 限流/节流关键词（非 429 状态码也可能带限流文案）。
 var wbSoftRateMarkers = []string{
@@ -152,6 +169,13 @@ func ClassifyWorkBuddyError(status int, body string) WorkBuddyErrKind {
 	lower := strings.ToLower(body)
 	for _, m := range wbHardMarkers {
 		if strings.Contains(lower, strings.ToLower(m)) || strings.Contains(body, m) {
+			return WBErrHardCredit
+		}
+	}
+	// 业务码兜底：上游额度耗尽返回 429 + {"code":14018}，文案可能随
+	// 版本变化，业务码是更稳定的信号，必须优先于软限流判定。
+	for _, c := range wbHardCreditCodes {
+		if strings.Contains(body, c) {
 			return WBErrHardCredit
 		}
 	}
