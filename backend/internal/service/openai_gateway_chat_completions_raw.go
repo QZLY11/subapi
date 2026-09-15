@@ -405,24 +405,6 @@ func (s *OpenAIGatewayService) streamRawChatCompletions(
 		keepaliveInterval = time.Duration(s.cfg.Gateway.StreamKeepaliveInterval) * time.Second
 	}
 
-	// 诊断：确认本路径是否被进入，以及 keepalive 配置的真实取值。
-	// since_start 是关键：若该值很小（<0.5s），说明「首字节前的静默」发生在本函数
-	// 内部（keepalive 应当生效）；若该值接近客户端的首字节等待时长，说明静默发生
-	// 在进入本函数之前（等待上游响应头阶段），keepalive 无论怎么改都救不了。
-	logger.L().Info("openai raw stream enter",
-		zap.String("request_id", requestID),
-		zap.Duration("since_start", time.Since(startTime)),
-		zap.Bool("cfg_nil", s.cfg == nil),
-		zap.Int("cfg_keepalive_seconds", func() int {
-			if s.cfg == nil {
-				return -1
-			}
-			return s.cfg.Gateway.StreamKeepaliveInterval
-		}()),
-		zap.Duration("keepalive_interval", keepaliveInterval),
-		zap.Int("request_body_len", requestBodyLen),
-	)
-
 	if keepaliveInterval <= 0 {
 		// 未启用 keepalive：保持原有同步直读路径，行为完全不变。
 		for scanner.Scan() {
@@ -478,16 +460,6 @@ func (s *OpenAIGatewayService) streamRawChatCompletions(
 				if clientDisconnected {
 					continue
 				}
-				// 诊断：确认 keepalive 分支是否被触发以及各判定的实际取值。
-				logger.L().Info("openai raw keepalive tick",
-					zap.String("request_id", requestID),
-					zap.Bool("detector_enabled", refusalDetector.Enabled()),
-					zap.Bool("client_output_started", clientOutputStarted),
-					zap.Duration("since_start", time.Since(startTime)),
-					zap.Duration("since_last_client_write", time.Since(lastClientWriteAt)),
-					zap.Duration("due_after", openAIKeepaliveDueAfter(keepaliveInterval, clientOutputStarted)),
-					zap.Bool("suppressed", shouldSuppressKeepaliveForSilentRefusal(refusalDetector, clientOutputStarted, time.Since(startTime))),
-				)
 				// 静默拒绝检测尚未释放缓冲时不能提前写响应头，否则会破坏
 				// 「空响应可透明 failover」的既有语义。
 				//
@@ -523,11 +495,6 @@ func (s *OpenAIGatewayService) streamRawChatCompletions(
 				c.Writer.Flush()
 				lastDataAt = time.Now()
 				lastClientWriteAt = lastDataAt
-				// 诊断：确认网关保活帧真的写给了客户端。
-				logger.L().Info("openai raw keepalive emitted",
-					zap.String("request_id", requestID),
-					zap.Duration("since_start", time.Since(startTime)),
-				)
 			}
 		}
 	}
