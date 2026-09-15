@@ -438,7 +438,10 @@ func (s *OpenAIGatewayService) streamRawChatCompletions(
 		}()
 		defer close(done)
 
-		keepaliveTicker := time.NewTicker(keepaliveInterval)
+		// ticker 周期取「grace」与「配置间隔」中较小者：提交缓冲期结束后需要按
+		// grace 的节奏尽早发出第一帧保活，若 ticker 仍按 10s 配置间隔触发，
+		// grace（5s）到期后还要再空等数秒，客户端静默窗口被无谓拉长。
+		keepaliveTicker := time.NewTicker(openAIKeepaliveDueAfter(keepaliveInterval, false))
 		defer keepaliveTicker.Stop()
 		lastDataAt := time.Now()
 		streamDone := false
@@ -477,7 +480,7 @@ func (s *OpenAIGatewayService) streamRawChatCompletions(
 				// 使网关 keepalive 被无限期跳过 —— 服务端认为「刚发过数据」，
 				// 客户端却在整个等待期收到零字节并自行断开。必须以「真正写给
 				// 客户端的最后一刻」为基准。
-				if time.Since(lastClientWriteAt) < keepaliveInterval {
+				if time.Since(lastClientWriteAt) < openAIKeepaliveDueAfter(keepaliveInterval, clientOutputStarted) {
 					continue
 				}
 				writeStreamHeaders()

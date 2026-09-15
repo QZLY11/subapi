@@ -70,6 +70,31 @@ func shouldSuppressKeepaliveForSilentRefusal(
 	return elapsed < openAISilentRefusalCommitGrace
 }
 
+// openAIKeepaliveDueAfter 返回两次保活之间应等待的间隔。
+//
+// 首字节之前使用较短的 grace 作为间隔，原因有二：
+//   - grace 到期即意味着已放弃「空响应透明 failover」，此时没有任何理由再等待。
+//     若仍沿用 keepaliveInterval（默认 10s），grace（5s）到期后还要再空等 5s
+//     才发出第一帧保活，客户端的静默窗口被白白拉长。
+//   - 提交缓冲期间上游会持续发送 `: heartbeat`，它们刷新「上游数据」时间戳却
+//     不会送达客户端，客户端在整个窗口内零字节；越早发出保活越安全。
+//
+// 首字节之后恢复配置值，保持与既有行为一致。
+func openAIKeepaliveDueAfter(keepaliveInterval time.Duration, clientOutputStarted bool) time.Duration {
+	if keepaliveInterval <= 0 {
+		// 调用方在 keepaliveInterval<=0 时走同步直读路径，不应到达这里；
+		// 返回 grace 而非 0，避免 time.NewTicker(0) panic。
+		return openAISilentRefusalCommitGrace
+	}
+	if clientOutputStarted {
+		return keepaliveInterval
+	}
+	if openAISilentRefusalCommitGrace < keepaliveInterval {
+		return openAISilentRefusalCommitGrace
+	}
+	return keepaliveInterval
+}
+
 func (d *openAIChatSilentRefusalDetector) ObserveSSELine(line string) {
 	if d == nil || !d.enabled {
 		return

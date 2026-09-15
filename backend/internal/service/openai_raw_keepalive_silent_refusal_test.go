@@ -110,3 +110,40 @@ func TestKeepaliveBaselineIsClientWriteNotUpstreamRead(t *testing.T) {
 			"注释行必须以冒号开头才是合法 SSE")
 	}
 }
+
+// TestOpenAIKeepaliveDueAfter 覆盖「grace 到期后仍要多等一个 keepalive 周期」
+// 这一时序缺陷。
+//
+// 生产复测（1.2MB body）：首字节 4.11s，落在 5s grace 之内；但 grace 到期后
+// ticker 仍按配置间隔（10s）触发，导致 5s–10s 之间没有任何保活帧，客户端静默
+// 窗口被无谓拉长。ticker 与判定阈值都必须改按 grace 的节奏。
+func TestOpenAIKeepaliveDueAfter(t *testing.T) {
+	const cfgInterval = 10 * time.Second
+
+	t.Run("首字节前按 grace 节奏", func(t *testing.T) {
+		got := openAIKeepaliveDueAfter(cfgInterval, false)
+		require.Equal(t, openAISilentRefusalCommitGrace, got,
+			"首字节前应使用 grace 作为间隔，避免 grace 到期后再空等一个配置周期")
+		require.Less(t, got, cfgInterval,
+			"首字节前的等待必须短于配置间隔")
+	})
+
+	t.Run("首字节后恢复配置值", func(t *testing.T) {
+		require.Equal(t, cfgInterval, openAIKeepaliveDueAfter(cfgInterval, true),
+			"已开始输出后应保持既有行为，使用配置间隔")
+	})
+
+	t.Run("配置间隔更小时不被放大", func(t *testing.T) {
+		// 若运维把间隔配成 5s 以下（允许 5–30），不得把间隔放大到 grace。
+		small := 5 * time.Second
+		require.Equal(t, small, openAIKeepaliveDueAfter(small, false))
+	})
+
+	t.Run("零配置不产生 ticker 周期", func(t *testing.T) {
+		// keepaliveInterval<=0 时走同步直读路径，本函数不应被用于构造 ticker；
+		// 但即便被调用也需返回正值以避免 panic（time.NewTicker(0) 会 panic）。
+		got := openAIKeepaliveDueAfter(0, false)
+		require.Greater(t, got, time.Duration(0),
+			"返回 0 会导致 time.NewTicker panic")
+	})
+}
