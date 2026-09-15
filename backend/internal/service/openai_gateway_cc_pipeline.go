@@ -9,7 +9,6 @@ import (
 	"fmt"
 	"io"
 	"net/http"
-	"os"
 	"strings"
 	"time"
 
@@ -187,8 +186,6 @@ func (s *OpenAIGatewayService) sendCCUpstreamRequest(
 	if account.IsWorkBuddy() {
 		// WorkBuddy 上游强制 stream + tool_choice 归一化 + developer→system。
 		body = PrepareWorkBuddyChatPayload(body)
-		// DEBUG(wb-request-body): 临时落盘最终发往上/游的请求体，用于定位 ccswitch 400。
-		_ = os.WriteFile(fmt.Sprintf("/app/data/logs/wb_reqbody_%d_%d.json", account.ID, time.Now().UnixNano()), body, 0600)
 	}
 	upstreamReq, err := http.NewRequestWithContext(upstreamCtx, http.MethodPost, targetURL, bytes.NewReader(body))
 	releaseUpstreamCtx()
