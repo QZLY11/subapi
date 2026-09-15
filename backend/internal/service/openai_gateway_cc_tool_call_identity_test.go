@@ -71,6 +71,33 @@ func TestStripEmptyChatToolCallIdentity_LegacyFunctionCallEmptyName(t *testing.T
 	require.Equal(t, "write_file", gjson.GetBytes(rewritten, "choices.0.delta.function_call.name").String())
 }
 
+// TestStripEmptyChatToolCallIdentity_ProductionFinalChunk 使用生产环境
+// 抓到的真实终止帧（finish_reason=tool_calls）逐字节验证。
+//
+// 该帧是压垮客户端的最后一击：客户端此前已通过 tool_calls 收到合法函数名
+// fn_3，终止帧又携带 {"function_call":{"name":"","arguments":""}}，
+// 客户端按 !== undefined 合并后把函数名覆盖为空串，随即抛
+// ToolNotFoundError: unknown tool "" 并终止会话。
+//
+// 注意 tool_calls 为空数组但也必须整体放行；只有 function_call.name 需删除。
+func TestStripEmptyChatToolCallIdentity_ProductionFinalChunk(t *testing.T) {
+	frame := []byte(`{"id":"cmb-x","object":"chat.completion.chunk","choices":[{"index":0,"delta":{"content":"","reasoning_content":"","function_call":{"name":"","arguments":""},"refusal":"","tool_calls":[],"extra_fields":null},"logprobs":null,"finish_reason":"tool_calls"}],"usage":null}`)
+
+	rewritten, changed := stripEmptyChatToolCallIdentity(frame)
+	require.True(t, changed, "生产终止帧中的空 function_call.name 必须被剔除")
+
+	// name 与 arguments 同时为空 → 整个 function_call 对象删除：
+	// 它不携带任何信息，客户端缺失即不覆盖已缓存的合法函数名与参数。
+	require.False(t, gjson.GetBytes(rewritten, "choices.0.delta.function_call").Exists())
+	require.NotContains(t, string(rewritten), `"name":""`)
+
+	// 其余字段一律不得改动。
+	require.Equal(t, "tool_calls", gjson.GetBytes(rewritten, "choices.0.finish_reason").String())
+	require.True(t, gjson.GetBytes(rewritten, "choices.0.delta.tool_calls").Exists())
+	require.Equal(t, "", gjson.GetBytes(rewritten, "choices.0.delta.refusal").String())
+	require.True(t, gjson.GetBytes(rewritten, "usage").Exists())
+}
+
 // TestStripEmptyChatToolCallIdentity_OnlyEmptyName / _OnlyEmptyID 只删
 // 空的那一个，非空字段必须保留。
 func TestStripEmptyChatToolCallIdentity_OnlyEmptyName(t *testing.T) {

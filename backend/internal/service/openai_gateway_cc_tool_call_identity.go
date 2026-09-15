@@ -81,14 +81,32 @@ func stripEmptyChatToolCallIdentity(payload []byte) ([]byte, bool) {
 		if !delta.Exists() || !delta.IsObject() {
 			continue
 		}
-		// 遗留形态：delta.function_call 上的空 name。
-		if name := delta.Get("function_call.name"); name.Exists() && name.Type == gjson.String && name.Str == "" {
-			next, err := sjson.DeleteBytes(updated, "choices."+strconv.Itoa(ci)+".delta.function_call.name")
-			if err != nil {
-				return payload, false
+		// 遗留形态：delta.function_call 上的空 name / 空 arguments。
+		//
+		// 客户端按 `!== undefined` 合并字段，因此空串会覆盖已缓存的合法值。
+		// name 与 arguments 同时为空时，该对象不携带任何信息，整体删除最安全；
+		// 仅 name 为空时只删 name，保留 arguments 碎片（与 tool_calls 语义一致）。
+		if fc := delta.Get("function_call"); fc.Exists() && fc.IsObject() {
+			name := fc.Get("name")
+			args := fc.Get("arguments")
+			emptyName := name.Exists() && name.Type == gjson.String && name.Str == ""
+			emptyArgs := args.Exists() && args.Type == gjson.String && args.Str == ""
+			switch {
+			case emptyName && emptyArgs:
+				next, err := sjson.DeleteBytes(updated, "choices."+strconv.Itoa(ci)+".delta.function_call")
+				if err != nil {
+					return payload, false
+				}
+				updated = next
+				changed = true
+			case emptyName:
+				next, err := sjson.DeleteBytes(updated, "choices."+strconv.Itoa(ci)+".delta.function_call.name")
+				if err != nil {
+					return payload, false
+				}
+				updated = next
+				changed = true
 			}
-			updated = next
-			changed = true
 		}
 		toolCalls := delta.Get("tool_calls")
 		if !toolCalls.Exists() || !toolCalls.IsArray() {
