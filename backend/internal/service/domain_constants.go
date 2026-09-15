@@ -119,9 +119,16 @@ func IsOpenCodeGo(platform string) bool {
 }
 
 // IsMultiProtocolAPIKeyProvider 报告 platform 是否为多协议 API Key 网关
-// （国产供应商 + OpenCode）：走 OpenAI 网关、支持 adaptive 协议分流。
+// （国产供应商 + OpenCode + WorkBuddy）：走 OpenAI 网关、支持 adaptive 协议分流。
+//
+// WorkBuddy CN（CodeBuddy / copilot.tencent.com）虽然上游只有 /v2/chat/completions，
+// 但对客户端同样暴露 /v1/messages + /v1/chat/completions + /v1/responses 三个入口
+// （与国产供应商分组同语义），因此 /v1/messages 调度闸门必须豁免：
+// cc-switch / Claude Code 客户端会把模型列表、usage 统计等辅助流量发到
+// /v1/messages，若被 allow_messages_dispatch（DB 恒为 false）拦成 403，
+// cc-switch 本地熔断器累积失败后把整个 provider 拉黑，表现为会话中断。
 func IsMultiProtocolAPIKeyProvider(platform string) bool {
-	return IsCNProvider(platform) || platform == PlatformOpenCodeGo
+	return IsCNProvider(platform) || platform == PlatformOpenCodeGo || platform == PlatformWorkBuddy
 }
 
 // AllowedQuotaPlatforms 是允许设置 user × platform quota 的平台列表（单一权威来源）。

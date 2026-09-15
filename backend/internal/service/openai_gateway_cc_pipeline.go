@@ -9,6 +9,7 @@ import (
 	"fmt"
 	"io"
 	"net/http"
+	"strconv"
 	"strings"
 	"time"
 
@@ -334,9 +335,17 @@ func logCCStreamMissingDoneSentinel(logPrefix, requestID string) {
 
 // readCCUpstreamJSONResponse 读取并解析 CC 非流式 JSON 响应，失败时以调用方
 // 端点格式回写错误；成功时顺带提取 usage。
+//
+// WorkBuddy CN 上游（CodeBuddy / copilot.tencent.com）只有 /v2/chat/completions
+// 且强制 stream=true（见 PrepareWorkBuddyChatPayload），因此即便客户端请求
+// stream=false，上游也只会返回 SSE 流。此函数检测到 WorkBuddy 账号的
+// text/event-stream 响应时，先把 SSE 聚合为单个 ChatCompletionsResponse 再返回，
+// 避免把 SSE 文本当 JSON 解析导致 502（生产实测 cc-switch / Claude Code 的
+// 非流式 /v1/responses、/v1/messages 辅助请求因此失败，累积触发本地熔断）。
 func (s *OpenAIGatewayService) readCCUpstreamJSONResponse(
 	c *gin.Context,
 	resp *http.Response,
+	account *Account,
 	writeError compatErrorWriter,
 ) (*apicompat.ChatCompletionsResponse, OpenAIUsage, error) {
 	respBody, err := ReadUpstreamResponseBody(resp.Body, s.cfg, c, openAITooLargeError)
@@ -345,6 +354,30 @@ func (s *OpenAIGatewayService) readCCUpstreamJSONResponse(
 			writeError(c, http.StatusBadGateway, "api_error", "Failed to read upstream response")
 		}
 		return nil, OpenAIUsage{}, fmt.Errorf("read upstream body: %w", err)
+	}
+
+	if account != nil && account.IsWorkBuddy() && looksLikeSSEBody(resp.Header, respBody) {
+		ccResp, aggErr := aggregateCCSSEToChatCompletionsResponse(respBody)
+		if aggErr != nil {
+			writeError(c, http.StatusBadGateway, "api_error", "Failed to parse upstream response")
+			return nil, OpenAIUsage{}, fmt.Errorf("aggregate workbuddy sse response: %w", aggErr)
+		}
+		usage := OpenAIUsage{}
+		if ccResp.Usage != nil {
+			usage.InputTokens = ccResp.Usage.PromptTokens
+			usage.OutputTokens = ccResp.Usage.CompletionTokens
+			if ccResp.Usage.PromptTokensDetails != nil {
+				usage.CacheReadInputTokens = ccResp.Usage.PromptTokensDetails.CachedTokens
+				usage.CacheCreationInputTokens = ccResp.Usage.PromptTokensDetails.CacheCreationTokens
+			}
+			if ccResp.Usage.CompletionTokensDetails != nil {
+				// reasoning_tokens 计入输出 token，单独字段留空（OpenAIUsage 无对应槽位）
+			}
+		}
+		if observer := upstreamResponseModelObserverFromContext(c); observer != nil {
+			observer.ObserveOpenAI(respBody, "")
+		}
+		return ccResp, usage, nil
 	}
 
 	var ccResp apicompat.ChatCompletionsResponse
@@ -363,6 +396,160 @@ func (s *OpenAIGatewayService) readCCUpstreamJSONResponse(
 		usage = parsed
 	}
 	return &ccResp, usage, nil
+}
+
+// looksLikeSSEBody 判断上游响应是否为 SSE 流：Content-Type 含 text/event-stream，
+// 或响应体以 SSE data 行开头（WorkBuddy 部分时段 Content-Type 标注不规范）。
+func looksLikeSSEBody(header http.Header, body []byte) bool {
+	if ct := header.Get("Content-Type"); strings.Contains(strings.ToLower(ct), "text/event-stream") {
+		return true
+	}
+	trimmed := bytes.TrimSpace(body)
+	return bytes.HasPrefix(trimmed, []byte("data:"))
+}
+
+// aggregateCCSSEToChatCompletionsResponse 把上游 CC SSE 流聚合为单个
+// ChatCompletionsResponse。用于 WorkBuddy 上游强制流式、客户端却请求非流式
+// 的场景：逐 chunk 合并 delta（content/reasoning_content/tool_calls 按流内
+// index 拼接），收集最后一次 usage，生成标准 chat.completion JSON。
+func aggregateCCSSEToChatCompletionsResponse(respBody []byte) (*apicompat.ChatCompletionsResponse, error) {
+	out := &apicompat.ChatCompletionsResponse{Object: "chat.completion"}
+	type aggChoice struct {
+		index            int
+		role             string
+		content          strings.Builder
+		reasoning        strings.Builder
+		toolCalls        map[int]*apicompat.ChatToolCall
+		toolOrder        []int
+		finishReason     string
+		contentTouched   bool
+		reasoningTouched bool
+	}
+	choices := make(map[int]*aggChoice)
+	maxIndex := -1
+	sawAnyData := false
+
+	scanner := bufio.NewScanner(bytes.NewReader(respBody))
+	scanner.Buffer(make([]byte, 64*1024), 8*1024*1024)
+	for scanner.Scan() {
+		line := scanner.Text()
+		payload, ok := extractOpenAISSEDataLine(line)
+		if !ok {
+			continue
+		}
+		payload = strings.TrimSpace(payload)
+		if payload == "" || payload == "[DONE]" {
+			continue
+		}
+		sawAnyData = true
+		var chunk apicompat.ChatCompletionsChunk
+		if err := json.Unmarshal([]byte(payload), &chunk); err != nil {
+			continue
+		}
+		if out.ID == "" && chunk.ID != "" {
+			out.ID = chunk.ID
+		}
+		if out.Model == "" && chunk.Model != "" {
+			out.Model = chunk.Model
+		}
+		if out.Created == 0 && chunk.Created != 0 {
+			out.Created = chunk.Created
+		}
+		if out.SystemFingerprint == "" && chunk.SystemFingerprint != "" {
+			out.SystemFingerprint = chunk.SystemFingerprint
+		}
+		if out.ServiceTier == "" && chunk.ServiceTier != "" {
+			out.ServiceTier = chunk.ServiceTier
+		}
+		if chunk.Usage != nil {
+			out.Usage = chunk.Usage
+		}
+		for _, ch := range chunk.Choices {
+			ac := choices[ch.Index]
+			if ac == nil {
+				ac = &aggChoice{index: ch.Index, role: "assistant", toolCalls: make(map[int]*apicompat.ChatToolCall)}
+				choices[ch.Index] = ac
+			}
+			if ch.Index > maxIndex {
+				maxIndex = ch.Index
+			}
+			d := ch.Delta
+			if strings.TrimSpace(d.Role) != "" {
+				ac.role = d.Role
+			}
+			if d.Content != nil {
+				ac.content.WriteString(*d.Content)
+				ac.contentTouched = true
+			}
+			if rc := d.ReasoningContent; rc != nil {
+				ac.reasoning.WriteString(*rc)
+				ac.reasoningTouched = true
+			} else if rc := d.Reasoning; rc != nil {
+				ac.reasoning.WriteString(*rc)
+				ac.reasoningTouched = true
+			}
+			for _, tc := range d.ToolCalls {
+				idx := 0
+				if tc.Index != nil {
+					idx = *tc.Index
+				}
+				cur := ac.toolCalls[idx]
+				if cur == nil {
+					cur = &apicompat.ChatToolCall{Index: &idx}
+					ac.toolCalls[idx] = cur
+					ac.toolOrder = append(ac.toolOrder, idx)
+				}
+				if cur.ID == "" && tc.ID != "" {
+					cur.ID = tc.ID
+				}
+				if cur.Type == "" && tc.Type != "" {
+					cur.Type = tc.Type
+				}
+				if cur.Function.Name == "" && tc.Function.Name != "" {
+					cur.Function.Name = tc.Function.Name
+				}
+				cur.Function.Arguments += tc.Function.Arguments
+			}
+			if ch.FinishReason != nil && strings.TrimSpace(*ch.FinishReason) != "" {
+				ac.finishReason = *ch.FinishReason
+			}
+		}
+	}
+	if err := scanner.Err(); err != nil {
+		return nil, err
+	}
+	if !sawAnyData {
+		return nil, fmt.Errorf("no sse data chunks in upstream response")
+	}
+
+	if maxIndex >= 0 {
+		out.Choices = make([]apicompat.ChatChoice, 0, maxIndex+1)
+		for i := 0; i <= maxIndex; i++ {
+			ac, ok := choices[i]
+			if !ok {
+				continue
+			}
+			msg := apicompat.ChatMessage{Role: ac.role}
+			if ac.contentTouched {
+				msg.Content = json.RawMessage(strconv.Quote(ac.content.String()))
+			}
+			if ac.reasoningTouched {
+				msg.ReasoningContent = ac.reasoning.String()
+			}
+			if len(ac.toolOrder) > 0 {
+				msg.ToolCalls = make([]apicompat.ChatToolCall, 0, len(ac.toolOrder))
+				for _, idx := range ac.toolOrder {
+					msg.ToolCalls = append(msg.ToolCalls, *ac.toolCalls[idx])
+				}
+			}
+			out.Choices = append(out.Choices, apicompat.ChatChoice{
+				Index:        ac.index,
+				Message:      msg,
+				FinishReason: ac.finishReason,
+			})
+		}
+	}
+	return out, nil
 }
 
 // writeOpenAIResponsesFallbackError 以 /v1/responses 回退路径的既有错误格式回写
