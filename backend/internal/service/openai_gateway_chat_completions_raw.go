@@ -319,6 +319,11 @@ func (s *OpenAIGatewayService) streamRawChatCompletions(
 	var firstTokenMs *int
 	clientDisconnected := false
 	clientOutputStarted := false
+	// lastClientWriteAt 记录「真正写给客户端的最后一刻」，与 lastDataAt（上游最后
+	// 一次吐行）区分开。上游的 `: heartbeat` 注释行会刷新 lastDataAt，但会被
+	// writeLine 缓冲、不发给客户端；若用 lastDataAt 判定 keepalive 必要性，这些
+	// 心跳就会让网关 keepalive 被无限期跳过。
+	lastClientWriteAt := startTime
 	pendingLines := make([]string, 0, 8)
 	refusalDetector := newOpenAIChatSilentRefusalDetector(requestBodyLen)
 	var terminal openAIRawStreamTerminalState
@@ -345,6 +350,7 @@ func (s *OpenAIGatewayService) streamRawChatCompletions(
 			}
 			pendingLines = pendingLines[:0]
 			clientOutputStarted = true
+			lastClientWriteAt = time.Now()
 		}
 		if _, werr := c.Writer.WriteString(line + "\n"); werr != nil {
 			clientDisconnected = true
@@ -352,7 +358,9 @@ func (s *OpenAIGatewayService) streamRawChatCompletions(
 				zap.Error(werr),
 				zap.String("request_id", requestID),
 			)
+			return
 		}
+		lastClientWriteAt = time.Now()
 	}
 
 	// handleLine 处理单行上游 SSE：统计 usage/首 token、改写后写往客户端。
@@ -463,7 +471,13 @@ func (s *OpenAIGatewayService) streamRawChatCompletions(
 				if shouldSuppressKeepaliveForSilentRefusal(refusalDetector, clientOutputStarted, time.Since(startTime)) {
 					continue
 				}
-				if time.Since(lastDataAt) < keepaliveInterval {
+				// lastClientWriteAt 而非 lastDataAt：上游会周期性发送 `: heartbeat`
+				// 注释行，它属于「上游数据」但被 writeLine 缓冲在 pendingLines 中，
+				// 并未写给客户端。若用 lastDataAt 判定，这些心跳会不断刷新时间戳，
+				// 使网关 keepalive 被无限期跳过 —— 服务端认为「刚发过数据」，
+				// 客户端却在整个等待期收到零字节并自行断开。必须以「真正写给
+				// 客户端的最后一刻」为基准。
+				if time.Since(lastClientWriteAt) < keepaliveInterval {
 					continue
 				}
 				writeStreamHeaders()
@@ -477,6 +491,7 @@ func (s *OpenAIGatewayService) streamRawChatCompletions(
 				}
 				c.Writer.Flush()
 				lastDataAt = time.Now()
+				lastClientWriteAt = lastDataAt
 			}
 		}
 	}
