@@ -1170,7 +1170,10 @@ func (s *OpenAIGatewayService) handleChatStreamingResponse(
 			if clientDisconnected {
 				continue
 			}
-			if refusalDetector.Enabled() && !clientOutputStarted {
+			// 与直转路径同因：静默拒绝检测保留缓冲时若无限期抑制 keepalive，
+			// 客户端会在上游长停顿期间收到零字节并自行断开（服务端仍记 200，
+			// 日志无痕）。超过 grace 后必须放行 keepalive 以保住会话。
+			if shouldSuppressKeepaliveForSilentRefusal(refusalDetector, clientOutputStarted, time.Since(startTime)) {
 				continue
 			}
 			if time.Since(lastDataAt) < keepaliveInterval {

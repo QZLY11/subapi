@@ -451,7 +451,16 @@ func (s *OpenAIGatewayService) streamRawChatCompletions(
 				}
 				// 静默拒绝检测尚未释放缓冲时不能提前写响应头，否则会破坏
 				// 「空响应可透明 failover」的既有语义。
-				if refusalDetector.Enabled() && !clientOutputStarted {
+				//
+				// 但该抑制必须有时间上限：一旦超过 openAISilentRefusalCommitGrace
+				// 仍无任何可释放输出，说明上游不是「快速返回空响应」而是真的卡住了。
+				// 此时继续抑制 keepalive 会让客户端在整个上游停顿期间收到零字节，
+				// 客户端按自身空闲超时断开，表现为「无任何报错直接断开」，而服务端
+				// 仍以 200 + 完整 usage 收尾，错误日志里查不到任何痕迹。
+				// 生产实测 claude-cli 请求首字节等待达 109s / 146s，远超客户端容忍度。
+				// 权衡：错过一次 failover 机会（已被判定为卡顿的账号本来也应换掉），
+				// 换取客户端会话存活。
+				if shouldSuppressKeepaliveForSilentRefusal(refusalDetector, clientOutputStarted, time.Since(startTime)) {
 					continue
 				}
 				if time.Since(lastDataAt) < keepaliveInterval {

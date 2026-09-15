@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"net/http"
 	"strings"
+	"time"
 
 	"github.com/Wei-Shaw/sub2api/internal/pkg/apicompat"
 	"github.com/gin-gonic/gin"
@@ -39,6 +40,34 @@ func newOpenAIChatSilentRefusalDetector(requestBodyLen int) *openAIChatSilentRef
 
 func (d *openAIChatSilentRefusalDetector) Enabled() bool {
 	return d != nil && d.enabled
+}
+
+// openAISilentRefusalCommitGrace 是「为静默拒绝检测保留缓冲」的最长时长。
+//
+// 静默拒绝的正常形态是上游很快返回 finish_reason=stop 且无内容，此时保留缓冲
+// 能实现「空响应透明 failover」。但如果上游长时间不吐任何可释放内容，保留缓冲
+// 就从保护变成了伤害：客户端在整个等待期收到零字节，按自身空闲超时断开，而
+// 服务端仍以 200 收尾，现象是「无任何报错直接断开」，日志无法归因。
+//
+// 生产实测 claude-cli 请求首字节等待 109s / 146s（>=64KB 请求体触发本检测器），
+// 远超客户端容忍度；而未触发本检测器的请求首字节普遍在 1–3s。
+// 取 5s：正常完成的静默拒绝通常在数百毫秒到 2s 内返回，仍能保住 failover 语义；
+// 超过 5s 即认定为卡顿，转为保活优先。
+const openAISilentRefusalCommitGrace = 5 * time.Second
+
+// shouldSuppressKeepaliveForSilentRefusal 报告本轮 keepalive 是否应被抑制。
+//
+// 仅在「检测器启用、客户端尚未收到任何字节、且仍在 commit grace 之内」时抑制。
+// grace 到期后必须放行 keepalive，否则客户端会在上游长停顿期间静默超时断开。
+func shouldSuppressKeepaliveForSilentRefusal(
+	d *openAIChatSilentRefusalDetector,
+	clientOutputStarted bool,
+	elapsed time.Duration,
+) bool {
+	if !d.Enabled() || clientOutputStarted {
+		return false
+	}
+	return elapsed < openAISilentRefusalCommitGrace
 }
 
 func (d *openAIChatSilentRefusalDetector) ObserveSSELine(line string) {
