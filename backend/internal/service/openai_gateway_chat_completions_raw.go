@@ -460,6 +460,16 @@ func (s *OpenAIGatewayService) streamRawChatCompletions(
 				if clientDisconnected {
 					continue
 				}
+				// 诊断：确认 keepalive 分支是否被触发以及各判定的实际取值。
+				logger.L().Info("openai raw keepalive tick",
+					zap.String("request_id", requestID),
+					zap.Bool("detector_enabled", refusalDetector.Enabled()),
+					zap.Bool("client_output_started", clientOutputStarted),
+					zap.Duration("since_start", time.Since(startTime)),
+					zap.Duration("since_last_client_write", time.Since(lastClientWriteAt)),
+					zap.Duration("due_after", openAIKeepaliveDueAfter(keepaliveInterval, clientOutputStarted)),
+					zap.Bool("suppressed", shouldSuppressKeepaliveForSilentRefusal(refusalDetector, clientOutputStarted, time.Since(startTime))),
+				)
 				// 静默拒绝检测尚未释放缓冲时不能提前写响应头，否则会破坏
 				// 「空响应可透明 failover」的既有语义。
 				//
