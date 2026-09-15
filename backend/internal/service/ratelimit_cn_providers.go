@@ -30,6 +30,53 @@ const kimiConcurrentRequestLimitMessage = "You've reached your concurrent reques
 
 const cnConcurrencyLimitReasonPrefix = "cn_concurrency_limit"
 
+// wbChannelBlockedReasonPrefix 是 WorkBuddy 渠道风控临时停调 reason 的稳定前缀。
+const wbChannelBlockedReasonPrefix = "workbuddy_channel_blocked"
+
+// wbChannelBlockedCooldown WorkBuddy 渠道风控临时停调时长。
+//
+// 上游对该账号打上渠道标记后不会立刻解除（生产实测同一账号连续命中，
+// 账号 34 在 13:57–14:06 的 9 分钟内命中 12 次），因此冷却必须显著长于
+// 秒级限流，让健康账号接替，而不是在坏号上反复重试。
+const wbChannelBlockedCooldown = 30 * time.Minute
+
+// handleWorkBuddyChannelBlocked 把上游「渠道风控拦截」（HTTP 400 + code 11128，
+// msg="Illegal API invocation from an unapproved channel"）标记为账号级临时停调。
+//
+// 为什么必须隔离而不是当作普通 4xx 轮转：
+//   - 该响应对**同一账号**是持续性的，换一次号重试就能成功，但坏号若继续留在
+//     调度池里，客户端会在随机的后续请求上再次命中 400 并中断会话——表现为
+//     「回复一句话就断开」且服务端错误日志稀疏、难以归因。
+//   - 生产实测 24 小时内 6 个账号累计命中 37 次，且全部仍 schedulable=t。
+//
+// 与内容审核拦截（WBErrContentBlocked）区分：后者是单次请求的语义问题，
+// 换号即可，不应影响账号健康度；这里是账号渠道被标记，必须冷却。
+func (s *RateLimitService) handleWorkBuddyChannelBlocked(
+	ctx context.Context,
+	account *Account,
+	upstreamMsg string,
+) {
+	if s == nil || account == nil || s.accountRepo == nil {
+		return
+	}
+	reason := wbChannelBlockedReasonPrefix
+	if msg := strings.TrimSpace(upstreamMsg); msg != "" {
+		reason = wbChannelBlockedReasonPrefix + ": " + msg
+	}
+	until := time.Now().Add(wbChannelBlockedCooldown)
+	s.notifyAccountSchedulingBlocked(account, until, wbChannelBlockedReasonPrefix)
+	if err := s.accountRepo.SetTempUnschedulable(ctx, account.ID, until, reason); err != nil {
+		slog.Warn("workbuddy_channel_blocked_set_temp_unschedulable_failed",
+			"account_id", account.ID, "error", err)
+		return
+	}
+	slog.Info("workbuddy_channel_blocked",
+		"account_id", account.ID,
+		"until", until.UTC(),
+		"cooldown_seconds", int(wbChannelBlockedCooldown.Seconds()),
+	)
+}
+
 func isCNProviderConcurrencyLimit403(account *Account, upstreamMsg string) bool {
 	return account != nil && account.Platform == PlatformKimi &&
 		strings.TrimSpace(upstreamMsg) == kimiConcurrentRequestLimitMessage

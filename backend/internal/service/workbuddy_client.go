@@ -78,6 +78,9 @@ const (
 	WBErrContentBlocked                         // 400 + 审核文案 → 不罚号，降级重试
 	WBErrBadParams                              // 400 + 请求体解析失败 → 不罚号，仍轮转
 	WBErrClient                                 // 其他 4xx / 业务错误
+	// 注意：新增枚举必须追加在末尾，避免改变既有值——
+	// WBErrKind 会以数值形式进入错误日志与调度决策记录。
+	WBErrChannelBlocked // 400 + code 11128 渠道风控 → 账号级隔离
 )
 
 func (k WorkBuddyErrKind) String() string {
@@ -98,6 +101,8 @@ func (k WorkBuddyErrKind) String() string {
 		return "bad_params"
 	case WBErrClient:
 		return "client"
+	case WBErrChannelBlocked:
+		return "channel_blocked"
 	default:
 		return "none"
 	}
@@ -144,6 +149,36 @@ var wbContentBlockedMarkers = []string{
 	"blocked by security policy",
 	"unapproved channel",
 	"illegal api invocation",
+}
+
+// 渠道风控业务码。上游在判定请求"来自未授权渠道"时返回 HTTP 400 +
+// {"code":11128,"msg":"Illegal API invocation from an unapproved channel"}，
+// 中文文案为「请求被安全策略拦截，请稍后重试或联系支持。」
+//
+// 与内容审核拦截（同样 400）不同：内容审核是**单次请求**的语义问题，
+// 换号重试即可；11128 是上游对该**账号渠道**的风控标记，同一账号会持续
+// 命中——生产实测 24 小时内账号 34 命中 12 次、28 命中 8 次、35 命中 8 次，
+// 且命中后该账号仍在被反复调度，每次命中客户端就收到 400 而中断会话。
+// 因此必须把它当作账号级故障隔离，而不是可轮转的普通 4xx。
+// wbChannelBlockedCodeRe 是渠道风控业务码的**精确**匹配式。
+//
+// 不能用 strings.Contains(body, `"code":11128`)：那会误伤 `"code":111280`
+// 这类以 11128 为前缀的其他业务码。用 \b 词边界锚定末尾，允许上游在冒号后
+// 加空格、以及把数字写成字符串（"11128"）。
+var wbChannelBlockedCodeRe = regexp.MustCompile(`"code"\s*:\s*"?11128"?\b`)
+
+// IsWorkBuddyChannelBlocked 报告上游响应是否为渠道风控拦截（code 11128）。
+func IsWorkBuddyChannelBlocked(body string) bool {
+	if body == "" {
+		return false
+	}
+	if wbChannelBlockedCodeRe.MatchString(body) {
+		return true
+	}
+	// 文案兜底：某些上游变体省略业务码只留 msg。
+	lower := strings.ToLower(body)
+	return strings.Contains(lower, "unapproved channel") &&
+		strings.Contains(lower, "illegal api invocation")
 }
 
 // 请求体解析失败关键词（发给上游的 body 有问题，不罚号）。
@@ -199,6 +234,14 @@ func ClassifyWorkBuddyError(status int, body string) WorkBuddyErrKind {
 		return WBErrServer
 	}
 	if status >= 400 {
+		// 渠道风控优先于内容审核判定：11128 的英文文案
+		// "Illegal API invocation from an unapproved channel" 同时命中
+		// wbContentBlockedMarkers 里的 "unapproved channel" /
+		// "illegal api invocation"，若顺序反转会被降级为「不罚号」的
+		// WBErrContentBlocked，账号继续被调度并持续返回 400。
+		if IsWorkBuddyChannelBlocked(body) {
+			return WBErrChannelBlocked
+		}
 		for _, m := range wbContentBlockedMarkers {
 			if strings.Contains(lower, m) {
 				return WBErrContentBlocked

@@ -192,6 +192,34 @@ func (s *OpenAIGatewayService) forwardAsRawChatCompletions(
 	// 7. Handle error response with failover
 	if resp.StatusCode >= 400 {
 		respBody, upstreamMsg := s.readOpenAIUpstreamError(resp)
+		// WorkBuddy 上游渠道风控（HTTP 400 + code 11128）必须在此处以账号级
+		// 隔离处理：该响应在账号层面是持续性的，若按普通 4xx 放行，被标记的
+		// 账号会一直留在调度池中并反复返回 400，客户端每次命中即中断会话。
+		// 注意顺序：必须在 failoverOpenAIUpstreamHTTPError 之前判定，否则会先
+		// 被通用错误策略吞掉；一旦隔离成功即返回可 failover 错误让调度器换号。
+		if account.IsWorkBuddy() && IsWorkBuddyChannelBlocked(string(respBody)) {
+			appendOpsUpstreamError(c, OpsUpstreamErrorEvent{
+				ProxyID:            opsUpstreamProxyID(account),
+				ProxyName:          opsUpstreamProxyName(account),
+				Platform:           account.Platform,
+				AccountID:          account.ID,
+				AccountName:        account.Name,
+				UpstreamStatusCode: resp.StatusCode,
+				UpstreamRequestID:  firstNonEmpty(resp.Header.Get("x-request-id"), resp.Header.Get("x-requestid")),
+				Kind:               "channel_blocked",
+				Message:            upstreamMsg,
+			})
+			if s.rateLimitService != nil {
+				s.rateLimitService.handleWorkBuddyChannelBlocked(ctx, account, upstreamMsg)
+			}
+			// 返回可 failover 错误：客户端尚未收到任何字节（此处仍在错误分支），
+			// 调度器会透明换号重试，客户端不会看到半截流。
+			return nil, &UpstreamFailoverError{
+				StatusCode:      resp.StatusCode,
+				ResponseBody:    respBody,
+				ResponseHeaders: resp.Header.Clone(),
+			}
+		}
 		if account.Platform == PlatformGrok {
 			kind := "http_error"
 			if s.shouldFailoverGrokUpstreamError(resp.StatusCode, respBody) {
