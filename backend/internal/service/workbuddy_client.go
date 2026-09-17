@@ -401,6 +401,11 @@ func applyWorkBuddyUpstreamHeaders(h http.Header, a *Account) {
 	if ua != "" {
 		h.Set("User-Agent", ua)
 	}
+	// 官方客户端指纹头（X-CodeBuddy-Request / Accept-Language / X-Machine-ID /
+	// X-Session-ID）。缺失或形态不符会被上游判为「非官方客户端」并返回
+	// 401 "not from a valid issuer"——账号看起来健康却始终无法对话。
+	// 只补不覆盖：上面显式设置过的值优先。
+	applyWorkBuddyClientFingerprintHeaders(h, a)
 }
 
 // FromAccount 从 sub2api Account.Credentials 解析 WorkBuddyAuth。
@@ -528,7 +533,7 @@ func (c *WorkBuddyClient) RefreshHeaders(req *http.Request, a *WorkBuddyAuth) {
 			req.Header.Set("X-Enterprise-Id", a.EnterpriseID)
 		}
 	}
-	req.Header.Set("X-Auth-Refresh-Source", "workbuddy")
+	req.Header.Set("X-Auth-Refresh-Source", wbAuthRefreshSourcePlugin)
 }
 
 // wbEnvelope 上游统一信封 {code,msg,data}。
