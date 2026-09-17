@@ -81,6 +81,13 @@ const (
 	// 注意：新增枚举必须追加在末尾，避免改变既有值——
 	// WBErrKind 会以数值形式进入错误日志与调度决策记录。
 	WBErrChannelBlocked // 400 + code 11128 渠道风控 → 账号级隔离
+	// WBErrPromptTooLong 400 + code 11115「prompt is too long」等**请求级**错误
+	// （移植自 workbuddy2api ErrPromptTooLong）。
+	//
+	// 它是客户端上下文超限，与账号无关：既不罚号也不轮转（换号重放同一条超长
+	// 请求只会重复失败并放大上游请求量）。历史上它落进 WBErrClient 分支按账号级
+	// 处理，导致一次超长请求把健康账号拖进冷却、后续正常请求被无谓降速。
+	WBErrPromptTooLong
 )
 
 func (k WorkBuddyErrKind) String() string {
@@ -103,9 +110,50 @@ func (k WorkBuddyErrKind) String() string {
 		return "client"
 	case WBErrChannelBlocked:
 		return "channel_blocked"
+	case WBErrPromptTooLong:
+		return "prompt_too_long"
 	default:
 		return "none"
 	}
+}
+
+// wbPromptTooLongCodeRe 请求级上下文超限业务码（上游 11115）。
+// 与渠道风控同口径用词边界锚定，避免误伤 111150 这类前缀相同的其他业务码。
+var wbPromptTooLongCodeRe = regexp.MustCompile(`"code"\s*:\s*"?11115"?\b`)
+
+// wbPromptTooLongMarkers 上游上下文超限的文案家族（小写比对）。
+// 覆盖 CodeBuddy 英文文案与转发层可能出现的中文变体。
+var wbPromptTooLongMarkers = []string{
+	"prompt is too long",
+	"request is too long",
+	"context length exceeded",
+	"context window",
+	"maximum context length",
+	"exceeds the maximum",
+	"input is too long",
+	"too many tokens",
+	"上下文过长", "上下文超限", "超出最大长度", "请求内容过长",
+}
+
+// IsWorkBuddyPromptTooLong 报告上游响应是否为请求级上下文超限（code 11115 / 文案家族）。
+//
+// 该判定必须先于 WBErrClient 与 WBErrSoftRate：文案里的 "too many tokens" 会命中
+// wbSoftRateMarkers 的 "too many"，若不提前拦截，一次超长请求会被判成软限流而把
+// 账号短冷却。
+func IsWorkBuddyPromptTooLong(body string) bool {
+	if body == "" {
+		return false
+	}
+	if wbPromptTooLongCodeRe.MatchString(body) {
+		return true
+	}
+	lower := strings.ToLower(body)
+	for _, m := range wbPromptTooLongMarkers {
+		if strings.Contains(lower, m) {
+			return true
+		}
+	}
+	return false
 }
 
 // 余额不足关键词（小写 + 中文原文双通道）。
@@ -218,6 +266,12 @@ func ClassifyWorkBuddyError(status int, body string) WorkBuddyErrKind {
 		if strings.Contains(body, m) {
 			return WBErrSessionDead
 		}
+	}
+	// 请求级上下文超限必须先于软限流与 client 判定：
+	// "too many tokens" 会命中 wbSoftRateMarkers 的 "too many" 子串，
+	// 若不提前拦截，一次超长请求会被误判为账号软限流并触发短冷却。
+	if IsWorkBuddyPromptTooLong(body) {
+		return WBErrPromptTooLong
 	}
 	for _, m := range wbSoftRateMarkers {
 		if strings.Contains(lower, strings.ToLower(m)) || strings.Contains(body, m) {

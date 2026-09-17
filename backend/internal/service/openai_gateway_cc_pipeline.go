@@ -185,8 +185,13 @@ func (s *OpenAIGatewayService) sendCCUpstreamRequest(
 ) (*http.Response, error) {
 	upstreamCtx, releaseUpstreamCtx := detachUpstreamContext(ctx)
 	if account.IsWorkBuddy() {
-		// WorkBuddy 上游强制 stream + tool_choice 归一化 + developer→system。
-		body = PrepareWorkBuddyChatPayload(body)
+		// WorkBuddy 上游强制 stream + tool_choice 归一化 + developer→system +
+		// 工具配对自愈 + prompt_cache_key 注入（按账号隔离，费用可降 ~17×）。
+		body = prepareWorkBuddyChatPayloadWithIdentity(
+			body,
+			account.GetCredential("uid"),
+			ExtractClientSessionID(c),
+		)
 	}
 	upstreamReq, err := http.NewRequestWithContext(upstreamCtx, http.MethodPost, targetURL, bytes.NewReader(body))
 	releaseUpstreamCtx()

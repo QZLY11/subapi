@@ -220,6 +220,28 @@ func (s *OpenAIGatewayService) forwardAsRawChatCompletions(
 				ResponseHeaders: resp.Header.Clone(),
 			}
 		}
+		// WorkBuddy 请求级上下文超限（HTTP 400 + code 11115）不罚号也不轮转：
+		// 这是客户端会话上下文过长，与账号健康无关。换号重放同一条超长请求只会
+		// 在原样失败的同时放大上游请求量，并把健康账号拖进无谓轮转。
+		// 必须放在通用 4xx 策略之前：否则会被当作账号级错误处理。
+		// 返回不可 failover 的错误 → 把上游原始错误直接交给客户端，由客户端
+		// 自行裁剪上下文后重试。
+		if account.IsWorkBuddy() && IsWorkBuddyPromptTooLong(string(respBody)) {
+			appendOpsUpstreamError(c, OpsUpstreamErrorEvent{
+				ProxyID:            opsUpstreamProxyID(account),
+				ProxyName:          opsUpstreamProxyName(account),
+				Platform:           account.Platform,
+				AccountID:          account.ID,
+				AccountName:        account.Name,
+				UpstreamStatusCode: resp.StatusCode,
+				UpstreamRequestID:  firstNonEmpty(resp.Header.Get("x-request-id"), resp.Header.Get("x-requestid")),
+				Kind:               "prompt_too_long",
+				Message:            upstreamMsg,
+			})
+			// 不换号、不罚号：直接把上游错误交给客户端（与通用 4xx 收尾同路径），
+			// 由客户端裁剪上下文后重试。
+			return s.handleChatCompletionsErrorResponse(resp, c, account, billingModel)
+		}
 		if account.Platform == PlatformGrok {
 			kind := "http_error"
 			if s.shouldFailoverGrokUpstreamError(resp.StatusCode, respBody) {

@@ -23,9 +23,21 @@ const defaultWorkBuddyDeepSeekEffort = "high"
 //  4. deepseek 系模型注入 thinking.type=enabled + 缺档补默认档
 //  5. 按已缓存的模型 supportedEfforts 降级 reasoning_effort
 //  6. backfill assistant reasoning_content（deepseek 多轮一致性）
+//  7. 孤儿 tool_call↔tool 配对清理 + 同批结果重排（防 11148 顶死整条会话）
 //
 // 解析失败时原样返回（不做破坏性改写）。
 func PrepareWorkBuddyChatPayload(src []byte) []byte {
+	return prepareWorkBuddyChatPayloadWithIdentity(src, "", "")
+}
+
+// prepareWorkBuddyChatPayloadWithIdentity 是 PrepareWorkBuddyChatPayload 的完整形态，
+// 额外接收账号 uid 与会话标识用于注入 prompt_cache_key：
+//   - uid：账号 UID（credentials.uid），作为缓存键的账号隔离段——跨账号绝不碰撞，
+//     否则会命中他人前缀缓存并泄露对话内容；
+//   - conversationID：入站会话标识（body 无 conversation_id/Id 时的哈希源）。
+//
+// 两者为空时仍会注入键（隔离段退化为 "-"），但调用方应尽量传真实值。
+func prepareWorkBuddyChatPayloadWithIdentity(src []byte, uid, conversationID string) []byte {
 	if len(src) == 0 {
 		return src
 	}
@@ -43,6 +55,12 @@ func PrepareWorkBuddyChatPayload(src []byte) []byte {
 	injectWorkBuddyThinking(obj)
 	normalizeWorkBuddyReasoningEffort(obj, cachedWorkBuddyModelEfforts())
 	backfillWorkBuddyReasoningContent(obj)
+	// 工具配对自愈放在最后：前面的 role/content 归一可能改变消息形态，
+	// 配对判定必须基于最终出站形态。
+	sanitizeWorkBuddyToolPairing(obj)
+	// 费用优化：注入按账号隔离的 prompt_cache_key（费用可降 ~17×）。
+	// 放在配对清理之后：messages 已被裁剪，缓存前缀与实际出站内容一致。
+	injectWorkBuddyPromptCacheKey(obj, uid, conversationID)
 	out, err := json.Marshal(obj)
 	if err != nil {
 		return src
