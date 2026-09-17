@@ -9,7 +9,8 @@
 //   - models:      GET  https://copilot.tencent.com/console/enterprises/personal/models
 //
 // 账号凭证（credentials JSONB，对齐 workbuddy2api internal/auth.Auth）：
-//   access_token / refresh_token / expires_at / uid / enterprise_id / domain / device_token
+//
+//	access_token / refresh_token / expires_at / uid / enterprise_id / domain / device_token
 package service
 
 import (
@@ -88,6 +89,17 @@ const (
 	// 请求只会重复失败并放大上游请求量）。历史上它落进 WBErrClient 分支按账号级
 	// 处理，导致一次超长请求把健康账号拖进冷却、后续正常请求被无谓降速。
 	WBErrPromptTooLong
+	// WBErrWafBlock 403 + 无业务信封（HTML 拦截页 / 空体 / 纯文本）→ 账号软冷却。
+	//
+	// 移植自 workbuddy2api ErrWafBlock。上游在风控收紧时直接返回 WAF 拦截页，
+	// 形态是 HTTP 403 且 body 没有任何业务信封（无 `"code":` / `"msg":`）。
+	// 历史实现把它落进 WBErrClient（通用 4xx）——被拦的账号会继续留在池里被反复
+	// 调度，每次命中都把 403 返回给客户端，表现为「回复一句就断」。
+	//
+	// 与 WBErrChannelBlocked（code 11128 账号级隔离）不同：WAF 拦截是风控窗口性的，
+	// 窗口过去即恢复，故只做软冷却而非禁用。
+	// 带业务信封的 403（11140 request illegal 等）仍走既有分类链，不受本项影响。
+	WBErrWafBlock
 )
 
 func (k WorkBuddyErrKind) String() string {
@@ -112,6 +124,8 @@ func (k WorkBuddyErrKind) String() string {
 		return "channel_blocked"
 	case WBErrPromptTooLong:
 		return "prompt_too_long"
+	case WBErrWafBlock:
+		return "waf_block"
 	default:
 		return "none"
 	}
@@ -133,6 +147,26 @@ var wbPromptTooLongMarkers = []string{
 	"input is too long",
 	"too many tokens",
 	"上下文过长", "上下文超限", "超出最大长度", "请求内容过长",
+}
+
+// IsWorkBuddyWafBlocked 报告 403 响应是否为 WAF 拦截形态：
+// HTTP 403 且 body 无业务信封（无 `"code":` / `"msg":` JSON 字段——
+// HTML 拦截页、空体、纯文本均命中）。
+//
+// 带业务信封的 403（11140 request illegal / 11128 渠道风控等）仍走既有分类链，
+// 不受本判定影响——宁可漏判 WAF 也不误罚业务 403，后者有各自的权威分类。
+func IsWorkBuddyWafBlocked(status int, body string) bool {
+	if status != http.StatusForbidden {
+		return false
+	}
+	return !hasWorkBuddyBusinessEnvelope(body)
+}
+
+// hasWorkBuddyBusinessEnvelope 报告 body 是否含业务信封字段名。
+// 只做存在性判定（不解析 JSON）：畸形 JSON 但含 `"msg":` 字样仍按业务响应保守
+// 处理，避免把业务错误误判成 WAF。
+func hasWorkBuddyBusinessEnvelope(body string) bool {
+	return strings.Contains(body, `"code":`) || strings.Contains(body, `"msg":`)
 }
 
 // IsWorkBuddyPromptTooLong 报告上游响应是否为请求级上下文超限（code 11115 / 文案家族）。
@@ -288,6 +322,12 @@ func ClassifyWorkBuddyError(status int, body string) WorkBuddyErrKind {
 		return WBErrServer
 	}
 	if status >= 400 {
+		// WAF 拦截（403 + 无业务信封）优先判定：它是账号软冷却形态。
+		// 与下方 11128 判定互斥——渠道风控的 body 必然带业务信封，
+		// 故本判定对带信封的 403 返回 false，不干扰既有分类链。
+		if IsWorkBuddyWafBlocked(status, body) {
+			return WBErrWafBlock
+		}
 		// 渠道风控优先于内容审核判定：11128 的英文文案
 		// "Illegal API invocation from an unapproved channel" 同时命中
 		// wbContentBlockedMarkers 里的 "unapproved channel" /

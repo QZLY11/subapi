@@ -82,6 +82,49 @@ func isCNProviderConcurrencyLimit403(account *Account, upstreamMsg string) bool 
 		strings.TrimSpace(upstreamMsg) == kimiConcurrentRequestLimitMessage
 }
 
+// wbWafBlockedReasonPrefix 是 WAF 拦截软冷却的稳定 reason 前缀。
+// 带前缀便于运维从账号的 temp_unschedulable 原因里区分「风控窗口」与
+// 「渠道风控账号级隔离」（后者前缀为 wbChannelBlockedReasonPrefix）。
+const wbWafBlockedReasonPrefix = "workbuddy WAF blocked"
+
+// wbWafBlockedCooldown 是 WAF 拦截的软冷却时长。
+//
+// 比渠道风控隔离短得多：WAF 是上游风控的窗口性行为，窗口过去即恢复，
+// 不需要长期隔离账号。取与 429 软限流同量级，让账号在窗口后自动回到池中。
+const wbWafBlockedCooldown = 3 * time.Minute
+
+// handleWorkBuddyWafBlocked 把 WAF 拦截（403 + 无业务信封）的账号临时停调。
+//
+// 移植自 workbuddy2api 的 ErrWafBlock 处理（applyErrorPolicy 软冷却分支）。
+// 历史实现在 sub2api 缺失：这类 403 落进通用 4xx，账号既不冷却也不隔离，
+// 被上游风控拦住的账号会继续留在池里被反复调度，每次命中都返回 403 给客户端，
+// 客户端看到的是「回复一句就断」。软冷却后调度器会绕开它，直到窗口过去。
+func (s *RateLimitService) handleWorkBuddyWafBlocked(
+	ctx context.Context,
+	account *Account,
+	upstreamMsg string,
+) {
+	if s == nil || account == nil || s.accountRepo == nil {
+		return
+	}
+	reason := wbWafBlockedReasonPrefix
+	if msg := strings.TrimSpace(upstreamMsg); msg != "" {
+		reason = wbWafBlockedReasonPrefix + ": " + msg
+	}
+	until := time.Now().Add(wbWafBlockedCooldown)
+	s.notifyAccountSchedulingBlocked(account, until, wbWafBlockedReasonPrefix)
+	if err := s.accountRepo.SetTempUnschedulable(ctx, account.ID, until, reason); err != nil {
+		slog.Warn("workbuddy_waf_blocked_set_temp_unschedulable_failed",
+			"account_id", account.ID, "error", err)
+		return
+	}
+	slog.Info("workbuddy_waf_blocked",
+		"account_id", account.ID,
+		"until", until.UTC(),
+		"cooldown_seconds", int(wbWafBlockedCooldown.Seconds()),
+	)
+}
+
 func (s *RateLimitService) handleCNProviderConcurrencyLimit403(
 	ctx context.Context,
 	account *Account,

@@ -220,6 +220,35 @@ func (s *OpenAIGatewayService) forwardAsRawChatCompletions(
 				ResponseHeaders: resp.Header.Clone(),
 			}
 		}
+		// WorkBuddy WAF 拦截（HTTP 403 + 无业务信封）→ 账号软冷却。
+		//
+		// 上游风控收紧时返回的拦截页没有业务信封（HTML/空体/纯文本），与业务 403
+		// 形态可区分。此前它落进通用 4xx：账号既不冷却也不隔离，被拦住后仍留在池里
+		// 被反复调度，每次命中都把 403 抛给客户端（表现为「回复一句就断」）。
+		// 软冷却让调度器绕开该账号直到风控窗口过去；与渠道风控（11128，账号级长期
+		// 隔离）不同，WAF 是窗口性的，故只做短冷却。
+		// 返回可 failover 错误：客户端尚未收到任何字节，调度器透明换号重试。
+		if account.IsWorkBuddy() && IsWorkBuddyWafBlocked(resp.StatusCode, string(respBody)) {
+			appendOpsUpstreamError(c, OpsUpstreamErrorEvent{
+				ProxyID:            opsUpstreamProxyID(account),
+				ProxyName:          opsUpstreamProxyName(account),
+				Platform:           account.Platform,
+				AccountID:          account.ID,
+				AccountName:        account.Name,
+				UpstreamStatusCode: resp.StatusCode,
+				UpstreamRequestID:  firstNonEmpty(resp.Header.Get("x-request-id"), resp.Header.Get("x-requestid")),
+				Kind:               "waf_block",
+				Message:            upstreamMsg,
+			})
+			if s.rateLimitService != nil {
+				s.rateLimitService.handleWorkBuddyWafBlocked(ctx, account, upstreamMsg)
+			}
+			return nil, &UpstreamFailoverError{
+				StatusCode:      resp.StatusCode,
+				ResponseBody:    respBody,
+				ResponseHeaders: resp.Header.Clone(),
+			}
+		}
 		// WorkBuddy 请求级上下文超限（HTTP 400 + code 11115）不罚号也不轮转：
 		// 这是客户端会话上下文过长，与账号健康无关。换号重放同一条超长请求只会
 		// 在原样失败的同时放大上游请求量，并把健康账号拖进无谓轮转。
