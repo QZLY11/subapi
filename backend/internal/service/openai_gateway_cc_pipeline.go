@@ -433,6 +433,10 @@ func aggregateCCSSEToChatCompletionsResponse(respBody []byte) (*apicompat.ChatCo
 	choices := make(map[int]*aggChoice)
 	maxIndex := -1
 	sawAnyData := false
+	// sawDone 记录上游是否显式发过 data: [DONE]（正常收尾）。它是判定「流是否被
+	// 截断」的关键信号：EOF 收尾且未见 [DONE] 说明连接中断，此时残缺的
+	// tool_call 参数必须丢弃，否则客户端解析非法 JSON 卡死会话。
+	sawDone := false
 
 	scanner := bufio.NewScanner(bytes.NewReader(respBody))
 	scanner.Buffer(make([]byte, 64*1024), 8*1024*1024)
@@ -443,7 +447,11 @@ func aggregateCCSSEToChatCompletionsResponse(respBody []byte) (*apicompat.ChatCo
 			continue
 		}
 		payload = strings.TrimSpace(payload)
-		if payload == "" || payload == "[DONE]" {
+		if payload == "" {
+			continue
+		}
+		if payload == "[DONE]" {
+			sawDone = true
 			continue
 		}
 		sawAnyData = true
@@ -545,6 +553,21 @@ func aggregateCCSSEToChatCompletionsResponse(respBody []byte) (*apicompat.ChatCo
 				msg.ToolCalls = make([]apicompat.ChatToolCall, 0, len(ac.toolOrder))
 				for _, idx := range ac.toolOrder {
 					msg.ToolCalls = append(msg.ToolCalls, *ac.toolCalls[idx])
+				}
+				// 截断防护：流被截断时 tool_call 的 arguments 是残缺 JSON，
+				// 交给客户端会解析失败并卡死会话。截断的两个来源：
+				//   - finish_reason=="length"（模型因 max_tokens 提前中止）；
+				//   - 上游连接中断（EOF 收尾但未发 data: [DONE]，sawDone=false）。
+				// 完整参数原样保留（正例零改动）；空参数（无参工具）不是截断，
+				// 同样保留。
+				if ac.finishReason == "length" || !sawDone {
+					msg.ToolCalls = dropTruncatedWorkBuddyToolCalls(msg.ToolCalls)
+					// 全部被丢弃时不留下空数组：空 tool_calls 会让客户端
+					// 以为「本轮调用了工具但没有一个有效」，与「本轮无工具调用」
+					// 语义不同，会被判成配对断裂。
+					if len(msg.ToolCalls) == 0 {
+						msg.ToolCalls = nil
+					}
 				}
 			}
 			out.Choices = append(out.Choices, apicompat.ChatChoice{
