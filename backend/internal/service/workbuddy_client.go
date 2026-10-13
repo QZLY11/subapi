@@ -147,6 +147,9 @@ var wbPromptTooLongMarkers = []string{
 	"input is too long",
 	"too many tokens",
 	"上下文过长", "上下文超限", "超出最大长度", "请求内容过长",
+	// displayMsg.zh 的真实形态：上游把超限统一表述为「内容过长」，
+	// 不含「上下文/请求」前缀，只收录带前缀的变体会漏判本条。
+	"内容过长",
 }
 
 // IsWorkBuddyWafBlocked 报告 403 响应是否为 WAF 拦截形态：

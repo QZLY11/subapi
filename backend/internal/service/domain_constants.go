@@ -582,6 +582,10 @@ const (
 	// SettingKeyOllamaCloudUsageSettings stores the opt-in global runner switch and interval.
 	SettingKeyOllamaCloudUsageSettings = "ollama_cloud_usage_settings"
 
+	// SettingKeyWorkBuddyCreditsSettings stores the WorkBuddy 积分后台刷新开关、
+	// 单账号刷新周期与单轮处理上限（管理端 UI 可改）。
+	SettingKeyWorkBuddyCreditsSettings = "workbuddy_credits_settings"
+
 	// =========================
 	// Overload Cooldown (529)
 	// =========================

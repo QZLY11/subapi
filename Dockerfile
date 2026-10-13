@@ -64,9 +64,20 @@ ARG TARGETARCH
 
 ENV GOPROXY=${GOPROXY}
 ENV GOSUMDB=${GOSUMDB}
+# go.mod 要求 go >= 1.27；基础镜像可能只带 1.26。
+# auto 模式让 go 命令按 go.mod 自动下载所需工具链（构建时一次性拉取）。
+ENV GOTOOLCHAIN=auto
 
 # Install build dependencies
-RUN apk add --no-cache git ca-certificates tzdata
+# 同时兼容 Alpine(apk) 与 Debian(apt)：本机无 alpine 版基础镜像时可用
+# --build-arg GOLANG_IMAGE=golang:1.26-bookworm 复用已有镜像离线构建。
+RUN if command -v apk >/dev/null 2>&1; then \
+        apk add --no-cache git ca-certificates tzdata; \
+    else \
+        apt-get update && \
+        apt-get install -y --no-install-recommends git ca-certificates tzdata && \
+        rm -rf /var/lib/apt/lists/*; \
+    fi
 
 WORKDIR /app/backend
 

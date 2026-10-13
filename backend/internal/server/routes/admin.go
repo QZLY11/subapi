@@ -510,7 +510,13 @@ func registerWorkBuddyOAuthRoutes(admin *gin.RouterGroup, h *handler.Handlers) {
 		// 积分查询与签到（billing 域，走 www.codebuddy.cn）。
 		wb.GET("/accounts/:id/credits", h.Admin.WorkBuddyCredits.QueryCredits)
 		wb.POST("/accounts/:id/checkin", h.Admin.WorkBuddyCredits.Checkin)
+		// snapshot 只读本地快照（毫秒级），供页面加载；summary 是实时全量查询
+		// （逐个打上游，账号多时需数十秒），只应由"查询全部积分"之类的显式动作触发。
+		wb.GET("/credits/snapshot", h.Admin.WorkBuddyCredits.QueryCreditsSnapshot)
 		wb.GET("/credits/summary", h.Admin.WorkBuddyCredits.QueryCreditsSummary)
+		// 后台自动查询的开关与参数（单账号周期 / 单轮上限），管理端 UI 可改。
+		wb.GET("/credits/settings", h.Admin.WorkBuddyCredits.GetCreditsSettings)
+		wb.PUT("/credits/settings", h.Admin.WorkBuddyCredits.UpdateCreditsSettings)
 		wb.POST("/checkin/all", h.Admin.WorkBuddyCredits.CheckinAll)
 	}
 }

@@ -18,10 +18,17 @@ import (
 //   POST /api/v1/admin/workbuddy/checkin/all            → 全量一键签到
 type WorkBuddyCreditsHandler struct {
 	creditsService *service.WorkBuddyCreditsService
+	settingService *service.SettingService
 }
 
-func NewWorkBuddyCreditsHandler(creditsService *service.WorkBuddyCreditsService) *WorkBuddyCreditsHandler {
-	return &WorkBuddyCreditsHandler{creditsService: creditsService}
+func NewWorkBuddyCreditsHandler(
+	creditsService *service.WorkBuddyCreditsService,
+	settingService *service.SettingService,
+) *WorkBuddyCreditsHandler {
+	return &WorkBuddyCreditsHandler{
+		creditsService: creditsService,
+		settingService: settingService,
+	}
 }
 
 // QueryCredits 查询单账号积分（并落 extra 快照）。
@@ -64,7 +71,11 @@ func (h *WorkBuddyCreditsHandler) Checkin(c *gin.Context) {
 	response.Success(c, result)
 }
 
-// QueryCreditsSummary 查询全部 WorkBuddy 账号积分并汇总总额。
+// QueryCreditsSummary 实时查询全部 WorkBuddy 账号积分并汇总总额。
+//
+// 注意：这是【实时全量】查询，会逐个打上游 meter 接口，账号多时需数十秒。
+// 页面加载不要用它——用 QueryCreditsSnapshot 读快照；本接口只应由
+// 管理端显式动作（"刷新积分"按钮）触发。
 // GET /api/v1/admin/workbuddy/credits/summary
 func (h *WorkBuddyCreditsHandler) QueryCreditsSummary(c *gin.Context) {
 	if h == nil || h.creditsService == nil {
@@ -77,6 +88,80 @@ func (h *WorkBuddyCreditsHandler) QueryCreditsSummary(c *gin.Context) {
 		return
 	}
 	response.Success(c, summary)
+}
+
+// QueryCreditsSnapshot 读取积分快照（不打上游，毫秒级返回）。
+//
+// 数据由后台错开刷新服务维护（默认每账号约 10 分钟一次），可能略旧但绝不阻塞
+// 页面。响应中的 fetched_at 是该批快照里最新的一次更新时间，供 UI 显示"数据截至"。
+// GET /api/v1/admin/workbuddy/credits/snapshot
+func (h *WorkBuddyCreditsHandler) QueryCreditsSnapshot(c *gin.Context) {
+	if h == nil || h.creditsService == nil {
+		response.BadRequest(c, "workbuddy credits service is not enabled")
+		return
+	}
+	summary, err := h.creditsService.QueryCreditsSnapshot(c.Request.Context())
+	if err != nil {
+		response.ErrorFrom(c, err)
+		return
+	}
+	response.Success(c, summary)
+}
+
+// GetCreditsSettings 读取积分后台刷新设置：自动查询开关 / 单账号周期 / 单轮上限。
+// GET /api/v1/admin/workbuddy/credits/settings
+func (h *WorkBuddyCreditsHandler) GetCreditsSettings(c *gin.Context) {
+	if h == nil || h.settingService == nil {
+		response.BadRequest(c, "workbuddy credits settings service is not enabled")
+		return
+	}
+	settings, err := h.settingService.GetWorkBuddyCreditsSettings(c.Request.Context())
+	if err != nil {
+		response.ErrorFrom(c, err)
+		return
+	}
+	response.Success(c, settings)
+}
+
+// UpdateCreditsSettings 更新积分后台刷新设置。
+//
+// 部分更新：只传要改的字段即可（例如前端只翻开关、不动周期）。
+// 改动写入 settings 表，后台刷新服务下一轮立即生效，无需重启。
+// PUT /api/v1/admin/workbuddy/credits/settings
+func (h *WorkBuddyCreditsHandler) UpdateCreditsSettings(c *gin.Context) {
+	if h == nil || h.settingService == nil {
+		response.BadRequest(c, "workbuddy credits settings service is not enabled")
+		return
+	}
+	var req struct {
+		BackgroundRefreshEnabled *bool `json:"background_refresh_enabled"`
+		RefreshIntervalMinutes   *int  `json:"refresh_interval_minutes"`
+		MaxPerTick               *int  `json:"max_per_tick"`
+	}
+	if err := c.ShouldBindJSON(&req); err != nil {
+		response.BadRequest(c, "Invalid request: "+err.Error())
+		return
+	}
+	ctx := c.Request.Context()
+	settings, err := h.settingService.GetWorkBuddyCreditsSettings(ctx)
+	if err != nil {
+		response.ErrorFrom(c, err)
+		return
+	}
+	if req.BackgroundRefreshEnabled != nil {
+		settings.BackgroundRefreshEnabled = *req.BackgroundRefreshEnabled
+	}
+	if req.RefreshIntervalMinutes != nil {
+		settings.RefreshIntervalMinutes = *req.RefreshIntervalMinutes
+	}
+	if req.MaxPerTick != nil {
+		settings.MaxPerTick = *req.MaxPerTick
+	}
+	if err := h.settingService.SetWorkBuddyCreditsSettings(ctx, settings); err != nil {
+		response.ErrorFrom(c, err)
+		return
+	}
+	response.Success(c, settings)
 }
 
 // CheckinAll 对全部 WorkBuddy 账号一键签到，并返回签到后的汇总统计。
@@ -94,9 +179,9 @@ func (h *WorkBuddyCreditsHandler) CheckinAll(c *gin.Context) {
 	}
 	summary := summarizeCheckinResults(results)
 
-	// 签到会写 extra 快照，故随后再取一次汇总，让前端一次调用即可刷新
-	// 账号总数 / 总计分额度 / 剩余总积分 / 今日已签到数。
-	credits, cErr := h.creditsService.QueryAllCredits(ctx)
+	// 签到本身已把每个账号的积分写回 extra 快照，这里直接读快照即可
+	// （不再触发一次全量上游查询，避免签到接口再叠加数十秒耗时）。
+	credits, cErr := h.creditsService.QueryCreditsSnapshot(ctx)
 	if cErr == nil {
 		summary["credits"] = credits
 	} else {

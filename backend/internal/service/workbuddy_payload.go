@@ -90,17 +90,27 @@ func normalizeWorkBuddyRoles(obj map[string]any) {
 }
 
 // normalizeWorkBuddyArrayContent 把 messages[].content 为数组（Anthropic 风格
-// content blocks）的请求归一为纯字符串 content。ccswitch / Claude Code 等客户端
-// 走 /v1/chat/completions 时会发 OpenAI 顶层结构 + Anthropic content 数组的混合
-// body（例如 user 消息 content = [{"type":"text","text":"..."}]），腾讯
-// /v2/chat/completions 严格按 OpenAI 协议解析，content 数组会触发 400
-// （code=11101 "unsupported content type" / 11128 "unapproved channel"）。
+// content blocks）的请求归一：纯文本数组折叠为字符串；含 image_url 的数组保留
+// 数组形态并把 image_url 归一为上游需要的对象形态。
 //
-// 折叠规则（对齐 apicompat.AnthropicToChatCompletionsRequest 的 array→string）：
-//   - text 块：拼接为单个字符串，以 "\n\n" 分隔
-//   - tool_use 块：转为 assistant tool_calls（罕见，安当前仅防御式跳过）
-//   - image / 其他未知块：跳过（不在文本通道强塞，避免二次 400）
-//   - 全部块都不是 text（空）时：内容设为空字符串
+// ccswitch / Claude Code 等客户端走 /v1/chat/completions 时会发 OpenAI 顶层
+// 结构 + Anthropic content 数组的混合 body（例如 user 消息 content =
+// [{"type":"text","text":"..."}]），腾讯 /v2/chat/completions 严格按 OpenAI
+// 协议解析，纯文本 content 数组会触发 400（code=11101 "unsupported content
+// type" / 11-128 "unapproved channel"），所以纯文本数组折叠为字符串。
+//
+// 图片块方向相反：上游**接受** OpenAI 多模态对象形态的 content 数组 —— 字符串
+// 形态的 image_url 会 400 code=11101 "cannot unmarshal string into ...
+// ImageContent"，必须转为对象，因此含图数组保留数组、逐块归一，不再丢弃。
+//
+// 折叠规则：
+//   - text 块：非空文本拼接，以 "\n\n" 分隔
+//   - image_url 块：保留；image_url 字符串形态转 {"url": 原值}，对象形态及其
+//     detail / mime_type 等字段原样保留；空值/缺失不补默认值（让上游返回真实错误）
+//   - 数组中含 image_url 时整体保留数组形态（文本与图片都不丢）
+//   - tool_use / tool_result / thinking 等其他块：跳过（不在文本通道强塞，
+//     避免把结构化对象拼进 content 造成上游二次 400）
+//   - 全部块都不是 text/image_url（空）时：内容设为空字符串
 func normalizeWorkBuddyArrayContent(obj map[string]any) {
 	msgs, ok := obj["messages"].([]any)
 	if !ok {
@@ -119,23 +129,52 @@ func normalizeWorkBuddyArrayContent(obj map[string]any) {
 		if !isArray {
 			continue
 		}
-		var parts []string
+		var textParts []string
+		keepParts := make([]any, 0, len(blocks))
+		hasImage := false
 		for _, b := range blocks {
 			blk, ok := b.(map[string]any)
 			if !ok {
 				continue
 			}
 			typ, _ := blk["type"].(string)
-			if typ == "text" {
+			switch typ {
+			case "text":
 				if t, ok := blk["text"].(string); ok && strings.TrimSpace(t) != "" {
-					parts = append(parts, t)
+					textParts = append(textParts, t)
+					keepParts = append(keepParts, blk)
 				}
+			case "image_url":
+				normalizeWorkBuddyImageURLPart(blk)
+				hasImage = true
+				keepParts = append(keepParts, blk)
 			}
-			// 其他类型（tool_use/tool_result/image/thinking）不并入文本通道，
+			// 其他类型（tool_use/tool_result/thinking）不并入文本通道，
 			// 避免把结构化对象拼进 content 造成上游二次 400。
 		}
-		msg["content"] = strings.Join(parts, "\n\n")
+		if hasImage {
+			msg["content"] = keepParts
+			continue
+		}
+		msg["content"] = strings.Join(textParts, "\n\n")
 	}
+}
+
+// normalizeWorkBuddyImageURLPart 兼容 OpenAI chat 多模态 image_url 的两种写法。
+//
+// OpenAI Chat Completions 规范使用对象形态 {"url":"...","detail":"..."}，部分
+// 客户端（以及 Responses -> Chat 转换器）会发送字符串形态 "data:..." 或
+// "https://..."。WorkBuddy 上游只接受对象形态，字符串会返回 400 code=11101
+// "cannot unmarshal string into ... ImageContent"。
+//
+// 只做形状转换：字符串转 {"url": 原值}；已有对象及其 url/detail/mime_type
+// 原样保留；空字符串、缺失值、对象内非法 url 一律不补默认值，让上游返回真实错误。
+func normalizeWorkBuddyImageURLPart(part map[string]any) {
+	imageURL, ok := part["image_url"].(string)
+	if !ok || imageURL == "" {
+		return
+	}
+	part["image_url"] = map[string]any{"url": imageURL}
 }
 
 // sanitizeWorkBuddyBrandWords 改写 messages 里触发腾讯上游渠道风控的品牌词。
@@ -150,24 +189,45 @@ func normalizeWorkBuddyArrayContent(obj map[string]any) {
 // 因此这里只对 messages 里的字符串 content 做最小改写：把 "Anthropic's"
 // （含直撇号 U+0027 与弯撇号 U+2019 两种写法）改写为 "Anthropic"，保留系统
 // 提示词其余内容不变，避免破坏 Claude Code 对身份/工具/权限的定义。
+//
+// 含图消息的 content 是数组形态（见 normalizeWorkBuddyArrayContent），文本在
+// text 块里，同样要清洗——否则带图请求的品牌词风控缓解会被绕过。
 func sanitizeWorkBuddyBrandWords(obj map[string]any) {
 	msgs, ok := obj["messages"].([]any)
 	if !ok {
 		return
+	}
+	scrub := func(s string) string {
+		s = strings.ReplaceAll(s, "Anthropic's", "Anthropic")
+		return strings.ReplaceAll(s, "Anthropic\u2019s", "Anthropic")
 	}
 	for _, m := range msgs {
 		msg, ok := m.(map[string]any)
 		if !ok {
 			continue
 		}
-		content, ok := msg["content"].(string)
+		content, ok := msg["content"]
 		if !ok {
 			continue
 		}
-		if strings.Contains(content, "Anthropic") {
-			content = strings.ReplaceAll(content, "Anthropic's", "Anthropic")
-			content = strings.ReplaceAll(content, "Anthropic\u2019s", "Anthropic")
-			msg["content"] = content
+		switch c := content.(type) {
+		case string:
+			if strings.Contains(c, "Anthropic") {
+				msg["content"] = scrub(c)
+			}
+		case []any:
+			for _, rawBlock := range c {
+				blk, ok := rawBlock.(map[string]any)
+				if !ok {
+					continue
+				}
+				if typ, _ := blk["type"].(string); typ != "text" {
+					continue
+				}
+				if t, ok := blk["text"].(string); ok && strings.Contains(t, "Anthropic") {
+					blk["text"] = scrub(t)
+				}
+			}
 		}
 	}
 }

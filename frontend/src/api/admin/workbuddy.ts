@@ -178,7 +178,57 @@ export async function checkinAccount(id: number): Promise<WorkBuddyCheckinResult
   return data
 }
 
-/** 全量积分汇总（账号总数 / 总计分额度 / 剩余总积分 / 今日已签到数）。 */
+/**
+ * 积分快照（只读本地 Extra 缓存，不打上游，毫秒级返回）。
+ *
+ * 页面加载用这个：数据由后端后台错开刷新维护（默认每账号约 10 分钟一次），
+ * 可能略旧但绝不阻塞 UI。需要最新值时显式调用 queryCreditsSummary。
+ */
+export async function queryCreditsSnapshot(): Promise<WorkBuddyCreditsSummary> {
+  const { data } = await apiClient.get<WorkBuddyCreditsSummary>(
+    '/admin/workbuddy/credits/snapshot',
+    { timeout: 15_000 }
+  )
+  return data
+}
+
+/** WorkBuddy 积分后台刷新设置（管理端可改，改完下一轮生效，无需重启）。 */
+export interface WorkBuddyCreditsSettings {
+  /** 是否开启后台自动查询。关闭后快照只在点「查询全部积分」时更新。 */
+  background_refresh_enabled: boolean
+  /** 单账号刷新周期（分钟）：同一账号每多久查一次，与账号总数无关。 */
+  refresh_interval_minutes: number
+  /** 单轮扫描处理上限。账号数超过 上限×周期 后实际周期会自动拉长，保护上游。 */
+  max_per_tick: number
+}
+
+/** 读取积分后台刷新设置。 */
+export async function getCreditsSettings(): Promise<WorkBuddyCreditsSettings> {
+  const { data } = await apiClient.get<WorkBuddyCreditsSettings>(
+    '/admin/workbuddy/credits/settings',
+    { timeout: 15_000 }
+  )
+  return data
+}
+
+/** 更新积分后台刷新设置（部分更新：只传要改的字段）。 */
+export async function updateCreditsSettings(
+  patch: Partial<WorkBuddyCreditsSettings>
+): Promise<WorkBuddyCreditsSettings> {
+  const { data } = await apiClient.put<WorkBuddyCreditsSettings>(
+    '/admin/workbuddy/credits/settings',
+    patch,
+    { timeout: 20_000 }
+  )
+  return data
+}
+
+/**
+ * 实时全量积分汇总（账号总数 / 总计分额度 / 剩余总积分 / 今日已签到数）。
+ *
+ * ⚠️ 会逐个打上游 meter 接口，账号多时需数十秒，**不要放在页面加载路径上**。
+ * 仅由管理端显式动作（"刷新积分"按钮）触发。
+ */
 export async function queryCreditsSummary(): Promise<WorkBuddyCreditsSummary> {
   const { data } = await apiClient.get<WorkBuddyCreditsSummary>(
     '/admin/workbuddy/credits/summary',
@@ -205,6 +255,9 @@ export default {
   refreshAccountToken,
   queryCredits,
   checkinAccount,
+  queryCreditsSnapshot,
   queryCreditsSummary,
+  getCreditsSettings,
+  updateCreditsSettings,
   checkinAll,
 }

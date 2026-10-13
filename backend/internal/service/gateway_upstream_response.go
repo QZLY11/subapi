@@ -309,8 +309,72 @@ func extractUpstreamErrorMessage(body []byte) string {
 		return d
 	}
 
+	// 腾讯 WorkBuddy / CodeBuddy 风格：
+	//   {"code":11115,"msg":"prompt is too long: N tokens > M maximum",
+	//    "displayMsg":{"zh":"内容过长，请精简或新建任务"},
+	//    "extError":{"message":"prompt is too long: ..."}}
+	//
+	// 该结构不含 error/detail/message 任一标准字段，若不在此识别会被上层
+	// 兜底成「Upstream error: <status>」，导致下游（DSH 等）无法据错误文本
+	// 判定上下文超限，从而不触发压缩恢复，只能把 400 直接抛给用户。
+	// 优先级：extError.message（最精确）> msg（英文原文）> displayMsg.zh（中文提示）。
+	if m := strings.TrimSpace(gjson.GetBytes(body, "extError.message").String()); m != "" {
+		return normalizeWorkBuddyOverflowWording(m)
+	}
+	if m := strings.TrimSpace(gjson.GetBytes(body, "msg").String()); m != "" {
+		return normalizeWorkBuddyOverflowWording(m)
+	}
+	if m := strings.TrimSpace(gjson.GetBytes(body, "displayMsg.zh").String()); m != "" {
+		return normalizeWorkBuddyOverflowWording(m)
+	}
+
 	// 兜底：尝试顶层 message
 	return gjson.GetBytes(body, "message").String()
+}
+
+// wbOverflowWordingFallback 追加到腾讯超限文案尾部的标准句式。
+//
+// 上游原句为「prompt is too long: N tokens > M maximum」——它只说“太长”，
+// 既没有 "for this/the model"，也没有 "context length/window" 字样。而下游
+// 客户端（DSH 的 dsh-llm 溢出识别器 isContextWindowExceededError）要求错误
+// 文本命中下列任一正则才判定为 context overflow：
+//
+//	STRUCTURED_CONTEXT_OVERFLOW: context[-_ ](length|window)[-_ ](exceeded|overflowed|limit exceeded)
+//	MAX_CONTEXT_WINDOW:          (maximum|max) [allowed|supported] context (length|window)
+//	TOO_LARGE_FOR_CONTEXT:       (prompt|input|…) (is )?too (long|large) for (this|the) model context…
+//	EXCEEDS_MODEL_CONTEXT:       (prompt|…) …(exceeds|overflows)… context…
+//
+// 命中后客户端才触发「压缩 + 重试」的自动恢复；否则只能把 400 直接抛给用户，
+// 且会话上下文不会收缩，下一次请求继续撞同一堵墙。
+//
+// 本后缀经 DSH 真实正则实测命中 STRUCTURED_CONTEXT_OVERFLOW（结构化句式，
+// 判定强度最高的一条）。前缀保留上游原文（含精确的 token 计数），便于运维
+// 比对与用户理解。
+const wbOverflowWordingFallback = " (context window exceeded)"
+
+// normalizeWorkBuddyOverflowWording 把腾讯系的超限文案补全为下游可识别的
+// 标准句式。仅当原句确属上下文超限（IsWorkBuddyPromptTooLong）且尚未包含
+// 下游所需的识别词时才追加后缀；其他错误文本（风控、参数错等）原样返回，
+// 避免污染无关文案。
+//
+// 幂等：已含 "context window"/"context length" 的文本不再追加，重复调用不叠加。
+func normalizeWorkBuddyOverflowWording(msg string) string {
+	msg = strings.TrimSpace(msg)
+	if msg == "" {
+		return msg
+	}
+	if !IsWorkBuddyPromptTooLong(msg) {
+		return msg
+	}
+	lower := strings.ToLower(msg)
+	// 已含下游任一识别词则不再改写（幂等：重复经过本函数不会叠加后缀）。
+	if strings.Contains(lower, "context window") ||
+		strings.Contains(lower, "context length") ||
+		strings.Contains(lower, "for this model") ||
+		strings.Contains(lower, "for the model") {
+		return msg
+	}
+	return msg + wbOverflowWordingFallback
 }
 
 func extractUpstreamErrorCode(body []byte) string {

@@ -861,6 +861,7 @@ var ProviderSet = wire.NewSet(
 	wire.Bind(new(GrokOAuthTokenService), new(*GrokOAuthService)),
 	NewWorkBuddyOAuthService,
 	NewWorkBuddyCreditsService,
+	ProvideWorkBuddyCreditsRefresher,
 	NewGeminiOAuthService,
 	NewGeminiQuotaService,
 	NewCompositeTokenCacheInvalidator,

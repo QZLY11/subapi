@@ -40,9 +40,24 @@
       </div>
 
       <div class="flex shrink-0 items-center gap-2">
+        <!-- 自动查询开关：切换即写库，后台刷新服务下一轮生效，无需重启 -->
+        <label
+          class="inline-flex cursor-pointer select-none items-center gap-1.5 text-xs text-gray-600 dark:text-gray-300"
+          :title="t('admin.accounts.workbuddyCredits.autoRefreshHint')"
+          data-test="workbuddy-auto-refresh"
+        >
+          <Toggle
+            v-model="autoRefreshEnabled"
+            :disabled="settingsSaving"
+            @update:model-value="handleAutoRefreshChange"
+          />
+          <span>{{ t('admin.accounts.workbuddyCredits.autoRefresh') }}</span>
+        </label>
+
         <button
           type="button"
           data-test="workbuddy-summary-refresh"
+          :title="t('admin.accounts.workbuddyCredits.queryAllHint')"
           class="inline-flex items-center gap-1 rounded-md border border-gray-300 px-2.5 py-1.5 text-xs font-medium text-gray-700 transition-colors hover:bg-gray-50 disabled:cursor-not-allowed disabled:opacity-50 dark:border-gray-600 dark:text-gray-200 dark:hover:bg-gray-700"
           :disabled="loading || checkinRunning"
           @click="loadSummary"
@@ -61,7 +76,11 @@
               d="M4 4v5h.582m15.356 2A8.001 8.001 0 004.582 9m0 0H9m11 11v-5h-.581m0 0a8.003 8.003 0 01-15.357-2m15.357 2H15"
             />
           </svg>
-          {{ t('admin.accounts.workbuddyCredits.refreshSummary') }}
+          {{
+            loading
+              ? t('admin.accounts.workbuddyCredits.queryAllRunning')
+              : t('admin.accounts.workbuddyCredits.queryAll')
+          }}
         </button>
 
         <button
@@ -148,6 +167,7 @@
 import { computed, onMounted, ref } from 'vue'
 import { useI18n } from 'vue-i18n'
 import { adminAPI } from '@/api/admin'
+import Toggle from '@/components/common/Toggle.vue'
 import type { WorkBuddyCreditsSummary } from '@/api/admin/workbuddy'
 
 const { t } = useI18n()
@@ -160,6 +180,10 @@ const checkinRunning = ref(false)
 const error = ref<string | null>(null)
 const checkinMessage = ref<string | null>(null)
 const summary = ref<WorkBuddyCreditsSummary | null>(null)
+
+// 后台自动查询开关：与后端 settings 同步，切换即写库（下一轮生效，无需重启）。
+const autoRefreshEnabled = ref(true)
+const settingsSaving = ref(false)
 
 // 仅在确有 WorkBuddy 账号时显示（避免给未使用该平台的部署增加噪音）。
 const accountCount = computed(() => summary.value?.account_count ?? 0)
@@ -224,6 +248,10 @@ const extractErrorMessage = (e: unknown): string => {
   return err?.message || err?.reason || t('common.error')
 }
 
+/**
+ * 实时全量刷新：逐个打上游 meter 接口，账号多时需要数十秒。
+ * 只由「刷新积分」按钮显式触发——绝不在页面加载路径上调用。
+ */
 const loadSummary = async () => {
   if (loading.value) return
   loading.value = true
@@ -236,6 +264,21 @@ const loadSummary = async () => {
     })
   } finally {
     loading.value = false
+  }
+}
+
+/**
+ * 读取积分快照：后端只读 Extra 缓存，毫秒级返回，不打上游。
+ * 页面加载走这里，数据由后端后台错开刷新维护（每账号约 10 分钟一次），
+ * 所以可能略旧，但页面绝不会被它拖住。要最新值就点「刷新积分」。
+ */
+const loadSnapshot = async () => {
+  try {
+    summary.value = await adminAPI.workbuddy.queryCreditsSnapshot()
+  } catch (e) {
+    error.value = t('admin.accounts.workbuddyCredits.summaryFailed', {
+      error: extractErrorMessage(e)
+    })
   }
 }
 
@@ -267,7 +310,46 @@ const handleCheckinAll = async () => {
   }
 }
 
-onMounted(loadSummary)
+/**
+ * 读取后台自动查询设置。与快照并行加载、互不阻塞；
+ * 失败时保持默认（开启），不打断面板渲染。
+ */
+const loadSettings = async () => {
+  try {
+    const s = await adminAPI.workbuddy.getCreditsSettings()
+    autoRefreshEnabled.value = s.background_refresh_enabled
+  } catch {
+    // 设置读取失败不影响积分展示；用户仍可手动切换触发一次写入
+  }
+}
 
-defineExpose({ loadSummary })
+/**
+ * 切换自动查询开关，即时写库。
+ * 写失败时回滚开关位置，避免 UI 与后端状态不一致。
+ */
+const handleAutoRefreshChange = async (value: boolean) => {
+  settingsSaving.value = true
+  error.value = null
+  try {
+    const s = await adminAPI.workbuddy.updateCreditsSettings({
+      background_refresh_enabled: value
+    })
+    autoRefreshEnabled.value = s.background_refresh_enabled
+  } catch (e) {
+    autoRefreshEnabled.value = !value
+    error.value = t('admin.accounts.workbuddyCredits.autoRefreshFailed', {
+      error: extractErrorMessage(e)
+    })
+  } finally {
+    settingsSaving.value = false
+  }
+}
+
+// 页面挂载：并行读快照与设置。快照毫秒级返回；实时全量查询交给「查询全部积分」按钮。
+onMounted(() => {
+  void loadSnapshot()
+  void loadSettings()
+})
+
+defineExpose({ loadSummary, loadSnapshot, loadSettings })
 </script>
