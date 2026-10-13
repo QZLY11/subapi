@@ -1,7 +1,7 @@
 # Sub2API 项目说明文档
 
 > 分支：`workbuddy`（基于上游 `Wei-Shaw/sub2api`，远程 `mine` = `QZLY11/subapi`）
-> 更新时间：2026-09-16
+> 更新时间：2026-10-13
 > 本文档覆盖项目整体架构、WorkBuddy 平台集成、部署运维，以及 cc-switch/Claude Code 断连问题的完整排查与修复记录。
 
 ---
@@ -264,7 +264,94 @@ git push mine workbuddy    # 走全局 socks 代理（127.0.0.1:10808，需 Clas
 
 ---
 
-## 8. 常见问题
+## 8. 部署拓扑（2026-10 更新：已迁移美国服务器）
+
+### 8.1 当前服务器
+
+| 维度 | 值 |
+|---|---|
+| 主机 | `154.217.246.138`（美国洛杉矶，Fastmos / AS400619） |
+| 规格 | 16 核 / 15G RAM / 100G 磁盘（XFS，无 swap） |
+| 系统 | Debian 12，Docker 29.9.0 + Compose v5.6.0 |
+| 域名 | `ai.yeqiu.cc`（sub2api） · `artex.yeqiu.cc`（ARTeX） |
+| TLS | Caddy 2.11.7（Let's Encrypt 自动签发/续期，443/80） |
+
+> 历史：原香港服务器 `154.219.99.41`（4C/3.8G/40G）于 2026-10-10 磁盘耗尽引发
+> 全机故障，数据恢复后整体迁移至现美国服务器。香港机已清空（仅保留系统，留作
+> 应急回退观察）。
+
+### 8.2 容器清单
+
+| 容器 | 镜像 | 用途 |
+|---|---|---|
+| sub2api | `ghcr.io/qzly11/subapi:workbuddy` | 网关（8080，反代于 ai.yeqiu.cc） |
+| sub2api-postgres | postgres:18-alpine | 业务库 |
+| sub2api-redis | redis:8-alpine | 缓存/配额窗口 |
+| artex-artex-1 | artex:local（本地构建） | ARTeX 渗透平台（8787/8788） |
+| artex-postgres-1 | postgres:16-alpine | ARTeX 库 |
+
+### 8.3 构建与发布流程（走 GitHub，不在服务器编译）
+
+```
+本地改码 → git commit → git push mine workbuddy
+  → GitHub Actions「WorkBuddy Image」自动构建（linux/amd64）
+  → 推送 ghcr.io/qzly11/subapi:workbuddy（公开）+ Release 附件 tar.gz
+  → 服务器 docker pull → docker compose up -d --force-recreate sub2api
+```
+
+关键点：
+
+- **不要在服务器本地 `docker build`**：美国机拉 Docker Hub 基础镜像极慢（匿名限流），
+  且 `go.mod` 要求 go ≥ 1.27，旧基础镜像（golang:1.26）需 `GOTOOLCHAIN=auto` 才能构建。
+- GitHub runner 上构建快（基础镜像秒拉），产物直推 GHCR，服务器只负责 pull。
+- 镜像 tag 不变时 `docker compose up -d` 不会重建，必须加 `--force-recreate`。
+- 服务器上 deploy 目录：`/sub2api-deploy/`（compose + .env + 备份 dump）。
+
+---
+
+## 9. WorkBuddy 积分与签到（2026-10-13 重构）
+
+### 9.1 背景：账号页 120 秒卡死
+
+旧实现中，管理端「WorkBuddy 积分汇总」面板在页面加载时调用
+`GET /admin/workbuddy/credits/summary` —— 该接口对全部账号**串行**逐个打上游
+meter 接口，62 个账号累计 100~120 秒，页面表现为半天打不开。
+
+### 9.2 新架构：快照 + 后台错开刷新 + 手动全量
+
+```
+页面加载   → /credits/snapshot     只读 Extra 快照，毫秒级（实测 27ms）
+后台刷新   → WorkBuddyCreditsRefresher 每分钟扫描一次到期账号
+手动查询   → 「查询全部积分」按钮  → /credits/summary（受限并发实时全量）
+```
+
+- **快照**：积分结果写入 `accounts.extra`（`workbuddy_credits` 等键），读取零上游开销。
+- **后台刷新**：每个账号独立周期（默认 10 分钟），到期时刻用账号 ID 的 FNV-1a
+  哈希铺在周期内错开；每轮处理量按账号数自适应（`ceil(N/10)`），上限 30/轮。
+  - ≤300 账号：严格 10 分钟周期
+  - >300 账号：自动降频（1000 个 → 约 33 分钟），保护上游不被打爆
+- **设置**（settings 表，管理端 UI 可改，下一轮生效）：
+  `background_refresh_enabled`（自动查询开关）/ `refresh_interval_minutes` /
+  `max_per_tick`。接口 `GET/PUT /admin/workbuddy/credits/settings`。
+- 环境变量 `WORKBUDDY_CREDITS_BACKGROUND_REFRESH=0` 为运维级强制关闭（优先于 UI）。
+
+### 9.3 一键签到并发化
+
+`checkinOneAccount` 每个账号要打 3 次上游（活跃上报 + 签到 + 积分回读），
+旧实现全局锁串行 62 个账号顶满 5 分钟超时（日志实测 299977ms）。
+改为与积分查询一致的信号量限并发（4 并发 + 起步节流）。`checkinMu` 保留给
+单账号接口防重入。
+
+### 9.4 美国服务器的网络延迟问题（重要运维事实）
+
+上游 billing 域 `www.codebuddy.cn` 解析到腾讯云节点 `43.159.104.94`。
+香港服务器到该节点 ~19ms；**美国服务器 TLS 握手 1.4s、单次积分请求 6.6s**，
+串行/小并发下签到仍慢。上游接口本身正常（实测积分 200/OK、签到幂等 400
+「今天已签到」）。优化方向：billing 流量走香港/日本代理，或签到跳过已签到账号。
+
+---
+
+## 10. 常见问题
 
 | 问题 | 处置 |
 |---|---|
@@ -274,10 +361,12 @@ git push mine workbuddy    # 走全局 socks 代理（127.0.0.1:10808，需 Clas
 | 上游 `11128` | 渠道风控（品牌词/未批准渠道），账号进入 30min 冷却 |
 | 客户端「回复一半断」 | 按 §6.4 排障手册逐层定位 |
 | CI workflow 红 | 预存在的 golangci-lint/test 失败，与 workbuddy 分支无关，可忽略 |
+| 账号页积分一直转圈 | 旧版本 bug，升级到 2026-10-13 后的版本（快照 + 后台刷新） |
+| 签到很慢 | 美国机到 codebuddy.cn 延迟高（单请求 6.6s）× 串行；见 §9.3/§9.4 |
 
 ---
 
-## 9. 相关文档
+## 11. 相关文档
 
 - [WorkBuddy 集成实现说明](./workbuddy-integration-implementation.md)
 - [WorkBuddy 方案设计（Plan B）](./workbuddy-integration-plan-b.md)
