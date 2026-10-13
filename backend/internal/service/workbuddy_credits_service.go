@@ -250,8 +250,11 @@ func (s *WorkBuddyCreditsService) CheckinAccount(ctx context.Context, accountID 
 	return s.checkinOneAccount(ctx, account), nil
 }
 
-// checkinOneAccount 执行单账号签到（调用方持锁）。
-// 上游「今日已签到」视为正常（already），不算失败。
+// checkinOneAccount 执行单账号签到。
+//
+// 并发安全说明：批量路径（CheckinAllAccounts）并发调用本方法，每个账号
+// 写自己的数据行，互不冲突；单账号路径（CheckinAccount）持有 checkinMu
+// 防同一账号重入。上游「今日已签到」视为正常（already），不算失败。
 func (s *WorkBuddyCreditsService) checkinOneAccount(ctx context.Context, account *Account) *WorkBuddyCheckinResult {
 	result := &WorkBuddyCheckinResult{
 		UID:      account.GetCredential("uid"),
@@ -676,26 +679,46 @@ func wbExtraString(extra map[string]any, key string) string {
 }
 
 // CheckinAllAccounts 对全部 workbuddy 账号执行签到（手动「一键签到」）。
+//
+// 与 QueryAllCredits 一致的受限并发策略：每个账号需打 3 次上游
+// （活跃上报 + 签到 + 积分回读），串行 62 个账号会顶满 5 分钟超时。
+// 信号量限并发（wbCreditsRefreshConcurrency）并保留起步节流，把总耗时
+// 压到约 1/并发数。不同账号写不同数据行，并发安全；checkinMu 仍由
+// CheckinAccount（单账号接口）持有，防同一账号重入。
 func (s *WorkBuddyCreditsService) CheckinAllAccounts(ctx context.Context) ([]*WorkBuddyCheckinResult, error) {
 	accounts, err := s.ListWorkBuddyAccounts(ctx)
 	if err != nil {
 		return nil, err
 	}
-	s.checkinMu.Lock()
-	defer s.checkinMu.Unlock()
 
-	results := make([]*WorkBuddyCheckinResult, 0, len(accounts))
+	// 结果按原账号顺序落位，保证并发下输出顺序稳定。
+	results := make([]*WorkBuddyCheckinResult, len(accounts))
+	sem := make(chan struct{}, wbCreditsRefreshConcurrency)
+	var wg sync.WaitGroup
+
 	for i := range accounts {
 		account := &accounts[i]
-		results = append(results, s.checkinOneAccount(ctx, account))
+		wg.Add(1)
+		sem <- struct{}{}
+		go func(idx int, acc *Account) {
+			defer wg.Done()
+			defer func() { <-sem }()
+			defer func() { _ = recover() }()
+			results[idx] = s.checkinOneAccount(ctx, acc)
+		}(i, account)
+
+		// 受限并发下的起步节流：避免 N 个 goroutine 同一瞬间齐发上游。
 		if i < len(accounts)-1 {
 			select {
 			case <-ctx.Done():
+				wg.Wait()
+				slog.Info("workbuddy_checkin_all_done", "summary", WorkBuddyCheckinSummaryText(results))
 				return results, nil
 			case <-time.After(wbCreditsBatchDelay):
 			}
 		}
 	}
+	wg.Wait()
 	slog.Info("workbuddy_checkin_all_done", "summary", WorkBuddyCheckinSummaryText(results))
 	return results, nil
 }
