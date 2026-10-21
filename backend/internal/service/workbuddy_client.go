@@ -433,6 +433,11 @@ func applyWorkBuddyUpstreamHeaders(h http.Header, a *Account) {
 	// 401 "not from a valid issuer"——账号看起来健康却始终无法对话。
 	// 只补不覆盖：上面显式设置过的值优先。
 	applyWorkBuddyClientFingerprintHeaders(h, a)
+	// 会话头族（X-Conversation-ID / -Request-ID / -Message-ID / X-Request-ID /
+	// X-Root-Request-ID）。缺失会被渠道校验拦成 400 code=11128
+	// 「request illegal / 这次调用没通过渠道校验」，与 UA 指纹是两条独立校验。
+	// 会话键用账号自身派生：同账号多轮复用同一 conversation id。
+	applyWorkBuddyConversationHeaders(h, a, a.GetCredential("uid"))
 }
 
 // FromAccount 从 sub2api Account.Credentials 解析 WorkBuddyAuth。
@@ -557,14 +562,26 @@ func (c *WorkBuddyClient) clientVersionFor(realm string) string {
 	return wbRealmByName(realm).ClientVersion
 }
 
-// CommonHeaders 设置所有上游共享头。
+// CommonHeaders 设置所有上游共享头（按区域）。
+//
+// Origin/Referer/UA/Accept-Language 必须与账号所属区域一致：国际版
+// workbuddy.ai 的渠道校验比对的是国际版客户端的头族，写成国内版口径
+// 会被判「非官方客户端」并返回 11128 request illegal（渠道校验失败）。
 func (c *WorkBuddyClient) CommonHeaders(req *http.Request, a *WorkBuddyAuth) {
+	realm := wbRealmCN
+	if a != nil {
+		realm = a.realmName()
+	}
+	r := wbRealmByName(realm)
 	req.Header.Set("Content-Type", "application/json")
 	req.Header.Set("Accept", "application/json, text/plain, */*")
 	req.Header.Set("X-Requested-With", "XMLHttpRequest")
-	req.Header.Set("Origin", wbOriginReferer)
-	req.Header.Set("Referer", wbOriginReferer+"/")
-	req.Header.Set("User-Agent", c.userAgent())
+	req.Header.Set("Origin", r.Origin)
+	req.Header.Set("Referer", r.Origin+"/")
+	req.Header.Set("User-Agent", c.userAgentFor(realm))
+	if v := strings.TrimSpace(r.AcceptLanguage); v != "" {
+		req.Header.Set("Accept-Language", v)
+	}
 	if a == nil {
 		return
 	}

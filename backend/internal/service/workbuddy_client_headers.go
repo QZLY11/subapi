@@ -12,6 +12,7 @@ package service
 import (
 	"crypto/sha256"
 	"encoding/hex"
+	"fmt"
 	"net/http"
 	"strings"
 )
@@ -72,14 +73,25 @@ func workBuddyAcceptLanguageFor(a *Account) string {
 	return "en-US"
 }
 
-// deriveWorkBuddyAccountStableID 按 uid + 用途盐稳定派生 36 hex 设备/会话标识。
+// deriveWorkBuddyAccountStableID 按 uid + 用途盐稳定派生设备/会话标识。
 //
-// 用 sha256（非 md5）与项目既有派生保持同族；截 36 hex 与官方客户端形态一致。
+// 形态对齐官方客户端 5.8.4 抓包：machineId / sessionId 都是**带连字符的
+// UUIDv4 形状**（8-4-4-4-12）。此前这里输出 36 位无连字符 hex，形态本身
+// 就与官方不符，是一条可被识别的「网关特征」。
+//
 // 派生是纯函数：同账号跨进程/跨重启稳定（上游视为同一设备/会话），
 // 不同账号绝不碰撞（盐里含 uid），不同用途（machine/session）相互独立。
+// 取值必须按账号派生，不能在进程维度取一次 —— 那样所有账号会共用同一个
+// 设备标识，反而把它们关联到同一台机器。
 func deriveWorkBuddyAccountStableID(uid, purpose string) string {
 	sum := sha256.Sum256([]byte("wb2a:" + purpose + ":" + uid))
-	return hex.EncodeToString(sum[:18]) // 36 hex chars
+	h := hex.EncodeToString(sum[:16])
+	// 版本位 4、变体位 a，与官方 machineId 的 UUIDv4 形状一致。
+	b := []byte(h)
+	b[12] = '4'
+	b[16] = 'a'
+	h = string(b)
+	return fmt.Sprintf("%s-%s-%s-%s-%s", h[0:8], h[8:12], h[12:16], h[16:20], h[20:32])
 }
 
 // setIfEmpty 仅在头缺失或为空时写入（调用方显式设置的值优先）。
