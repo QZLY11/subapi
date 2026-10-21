@@ -50,9 +50,13 @@ const (
 	PlatformMiniMax    = domain.PlatformMiniMax
 	PlatformOpenCodeGo = domain.PlatformOpenCodeGo
 	PlatformComposite  = domain.PlatformComposite
-	// PlatformWorkBuddy 是 WorkBuddy CN（CodeBuddy / copilot.tencent.com）平台，
-	// 经 OpenAI 网关转发到 /v2/chat/completions。
+	// PlatformWorkBuddy 是国内版（品牌 CodeBuddy，上游 copilot.tencent.com /
+	// www.codebuddy.cn），经 OpenAI 网关转发到 /v2/chat/completions。
 	PlatformWorkBuddy = domain.PlatformWorkBuddy
+	// PlatformWorkBuddyIntl 是国际版（品牌 WorkBuddy，上游 www.workbuddy.ai）。
+	// 协议同源、端点同路径，仅区域参数不同（见 workbuddy_realm.go）；
+	// 账号池与国内版完全隔离，不参与彼此调度。
+	PlatformWorkBuddyIntl = domain.PlatformWorkBuddyIntl
 	// PlatformKiro is retained for unsupported-platform threshold tests and legacy
 	// account rows. Scheduling-threshold evaluation never pauses kiro accounts.
 	PlatformKiro = "kiro"
@@ -128,7 +132,7 @@ func IsOpenCodeGo(platform string) bool {
 // /v1/messages，若被 allow_messages_dispatch（DB 恒为 false）拦成 403，
 // cc-switch 本地熔断器累积失败后把整个 provider 拉黑，表现为会话中断。
 func IsMultiProtocolAPIKeyProvider(platform string) bool {
-	return IsCNProvider(platform) || platform == PlatformOpenCodeGo || platform == PlatformWorkBuddy
+	return IsCNProvider(platform) || platform == PlatformOpenCodeGo || IsWorkBuddyPlatform(platform)
 }
 
 // AllowedQuotaPlatforms 是允许设置 user × platform quota 的平台列表（单一权威来源）。
@@ -146,6 +150,13 @@ var AllowedQuotaPlatforms = []string{
 	PlatformMiniMax,
 	PlatformOpenCodeGo,
 	PlatformWorkBuddy,
+	PlatformWorkBuddyIntl,
+}
+
+// IsWorkBuddyPlatform 报告平台标识是否属于 WorkBuddy 家族（国内版或国际版）。
+// 两者共用 OpenAI 网关转发管线与模型目录，仅区域出站参数不同。
+func IsWorkBuddyPlatform(platform string) bool {
+	return platform == PlatformWorkBuddy || platform == PlatformWorkBuddyIntl
 }
 
 // AllowedSchedulingThresholdPlatforms 是允许设置账号自动停调阈值的平台列表。

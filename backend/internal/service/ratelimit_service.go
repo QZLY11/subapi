@@ -1172,7 +1172,7 @@ func (s *RateLimitService) handle429(ctx context.Context, account *Account, head
 	// WorkBuddy 同属此列：其额度耗尽返回 429 + code 14018（文案「额度已用尽」），
 	// 若走默认 429 逻辑只会冷却数秒，坏账号随即复活并再次 429，表现为
 	// 「回复一句就断」的循环。必须靠文案/业务码识别并做长时停调。
-	if account.IsCNProvider() || account.IsOpenCodeGo() || account.Platform == PlatformWorkBuddy {
+	if account.IsCNProvider() || account.IsOpenCodeGo() || account.IsWorkBuddy() {
 		if s.applyCNProviderReactive429(ctx, account, headers, responseBody) {
 			return
 		}

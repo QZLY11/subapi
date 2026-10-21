@@ -365,6 +365,26 @@ type WorkBuddyAuth struct {
 	UID          string
 	EnterpriseID string
 	DeviceToken  string
+	// Realm 区域标识（cn / intl）。空值按 Domain 推断，再退国内版。
+	// 决定 chat/billing 上游基址、Origin/Referer、UA 与语种。
+	Realm string
+}
+
+// realmName 返回生效区域名（Realm 优先，其次 Domain 推断）。
+func (a *WorkBuddyAuth) realmName() string {
+	if a == nil {
+		return wbRealmCN
+	}
+	if r := strings.TrimSpace(a.Realm); r != "" {
+		if _, ok := wbRealms[r]; ok {
+			return r
+		}
+	}
+	d := strings.ToLower(strings.TrimSpace(a.Domain))
+	if strings.Contains(d, "workbuddy.ai") || strings.Contains(d, "codebuddy.ai") {
+		return wbRealmIntl
+	}
+	return wbRealmCN
 }
 
 // applyWorkBuddyUpstreamHeaders 在 OpenAI CC 转发管线上为 workbuddy 账号注入
@@ -394,12 +414,16 @@ func applyWorkBuddyUpstreamHeaders(h http.Header, a *Account) {
 	// （openaiCCRawAllowedHeaders 放行了 user-agent，如 curl/x.x），上游会按 UA
 	// 指纹校验 issuer，客户端 UA 会导致 401 "not from a valid issuer"。
 	// GetOpenAIUserAgent() 只认 openai 平台，故 workbuddy 的账号级 UA 必须在这里读取。
-	// Origin/Referer 必须为 CodeBuddy 白名单域，上游会校验，故无条件补齐。
-	h.Set("Origin", wbOriginReferer)
-	h.Set("Referer", wbOriginReferer+"/")
+	// Origin/Referer 必须为对应区域的白名单域（国内 codebuddy.cn / 国际
+	// workbuddy.ai），上游会校验来源；跨区写错会被判非官方客户端。
+	// 区域由账号自身决定（platform 或 credentials.domain），见 wbRealmFor。
+	origin := wbOriginRefererFor(a)
+	h.Set("Origin", origin)
+	h.Set("Referer", origin+"/")
 	ua := strings.TrimSpace(a.GetCredential("user_agent"))
 	if ua == "" {
-		ua = (&WorkBuddyClient{}).userAgent()
+		// 无 client 实例上下文，用零值 client 生成区域默认 UA。
+		ua = (&WorkBuddyClient{}).userAgentFor(wbRealmFor(a.Platform, a))
 	}
 	if ua != "" {
 		h.Set("User-Agent", ua)
@@ -424,6 +448,8 @@ func WorkBuddyAuthFromAccount(a *Account) *WorkBuddyAuth {
 		UID:          a.GetCredential("uid"),
 		EnterpriseID: a.GetCredential("enterprise_id"),
 		DeviceToken:  a.GetCredential("device_token"),
+		// 区域由平台/域决定，透传给 client 选上游基址与 UA。
+		Realm: wbRealmFor(a.Platform, a),
 	}
 }
 
@@ -489,13 +515,46 @@ func (c *WorkBuddyClient) chatBase() string {
 	return wbUpstreamBaseCN
 }
 
-// userAgent 返回默认官方三段式 UA（WorkBuddy/<ver> WorkBuddy/<ver> CLI/<ver>）。
+// chatBaseFor 按区域返回 chat 上游基址（覆盖字段优先）。
+func (c *WorkBuddyClient) chatBaseFor(realm string) string {
+	if c != nil && c.ChatBase != "" {
+		return strings.TrimRight(c.ChatBase, "/")
+	}
+	return wbRealmByName(realm).ChatBase
+}
+
+// userAgent 返回默认官方三段式 UA（国内版口径，保留给无账号上下文的调用）。
 func (c *WorkBuddyClient) userAgent() string {
+	return c.userAgentFor(wbRealmCN)
+}
+
+// userAgentFor 按区域返回官方三段式 UA。
+//
+// 两区第二段不同：国内版 WorkBuddy/…，国际版 workbuddy-ai/…；写错会被
+// 判非官方客户端。账号 credentials.user_agent 存在时优先（在调用方处理）。
+func (c *WorkBuddyClient) userAgentFor(realm string) string {
 	if c != nil && c.UserAgent != "" {
 		return c.UserAgent
 	}
-	v := c.clientVersion()
-	return fmt.Sprintf("WorkBuddy/%s WorkBuddy/%s CLI/%s", v, v, c.cliVersion())
+	r := wbRealmByName(realm)
+	// 账号级 client_version 优先，其次区域默认版本。
+	v := c.clientVersionFor(realm)
+	cli := c.cliVersion()
+	app := "WorkBuddy"
+	if realm == wbRealmIntl {
+		app = "workbuddy-ai"
+	}
+	return fmt.Sprintf("WorkBuddy/%s %s/%s CLI/%s", v, app, r.ClientVersion, cli)
+}
+
+// clientVersionFor 按区域返回桌面端版本（ClientVersion 显式覆盖优先）。
+func (c *WorkBuddyClient) clientVersionFor(realm string) string {
+	if c != nil {
+		if v := strings.TrimSpace(c.ClientVersion); v != "" {
+			return v
+		}
+	}
+	return wbRealmByName(realm).ClientVersion
 }
 
 // CommonHeaders 设置所有上游共享头。
@@ -610,7 +669,7 @@ func (c *WorkBuddyClient) RefreshToken(ctx context.Context, a *WorkBuddyAuth) er
 	if a == nil || strings.TrimSpace(a.RefreshToken) == "" {
 		return fmt.Errorf("no refreshToken")
 	}
-	req, err := http.NewRequestWithContext(ctx, http.MethodPost, c.chatBase()+"/v2/plugin/auth/token/refresh", nil)
+	req, err := http.NewRequestWithContext(ctx, http.MethodPost, c.chatBaseFor(a.realmName())+"/v2/plugin/auth/token/refresh", nil)
 	if err != nil {
 		return err
 	}
@@ -640,7 +699,7 @@ func (c *WorkBuddyClient) RefreshToken(ctx context.Context, a *WorkBuddyAuth) er
 // 非 2xx 时 rc 为 nil、respBody 为上游响应体（供调用方分类）、err 为 nil；
 // 只有传输层失败才返回 err。
 func (c *WorkBuddyClient) ChatStream(a *WorkBuddyAuth, body []byte) (rc io.ReadCloser, status int, respBody []byte, err error) {
-	req, err := http.NewRequest(http.MethodPost, c.chatBase()+"/v2/chat/completions", bytes.NewReader(PrepareWorkBuddyChatPayload(body)))
+	req, err := http.NewRequest(http.MethodPost, c.chatBaseFor(a.realmName())+"/v2/chat/completions", bytes.NewReader(PrepareWorkBuddyChatPayload(body)))
 	if err != nil {
 		return nil, 0, nil, err
 	}

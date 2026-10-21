@@ -12,6 +12,8 @@ import { apiClient } from '../client'
 export interface WorkBuddyAuthUrlResponse {
   auth_url: string
   state: string
+  /** 本次授权所属区域（cn / intl）。 */
+  realm?: 'cn' | 'intl'
 }
 
 export interface WorkBuddyPollPending {
@@ -36,13 +38,23 @@ export interface WorkBuddyCreateFromOAuthRequest {
   concurrency?: number
   priority?: number
   group_ids?: number[]
+  /** 区域：cn=国内版(CodeBuddy) / intl=国际版(WorkBuddy)。缺省国内版。 */
+  realm?: 'cn' | 'intl'
 }
 
 const WORKBUDDY_POLL_TIMEOUT_MS = 30_000
 
-export async function generateAuthUrl(): Promise<WorkBuddyAuthUrlResponse> {
+/**
+ * 生成设备授权链接。
+ * realm 决定上游区域：国内版打 copilot.tencent.com / codebuddy.cn，
+ * 国际版打 www.workbuddy.ai。两区 state 不通用。
+ */
+export async function generateAuthUrl(
+  realm: 'cn' | 'intl' = 'cn'
+): Promise<WorkBuddyAuthUrlResponse> {
   const { data } = await apiClient.post<WorkBuddyAuthUrlResponse>(
-    '/admin/workbuddy/oauth/auth-url'
+    '/admin/workbuddy/oauth/auth-url',
+    { realm }
   )
   return data
 }

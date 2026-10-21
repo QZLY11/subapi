@@ -15,6 +15,40 @@
           <p class="mt-1 text-xs text-gray-500 dark:text-gray-400">
             {{ t('admin.accounts.oauth.workbuddy.step1Desc') }}
           </p>
+          <!-- 区域选择：两区账号互不相通，选错拿不到 token。 -->
+          <div class="mt-3 flex items-center gap-2">
+            <span class="text-xs text-gray-500 dark:text-gray-400">
+              {{ t('admin.accounts.oauth.workbuddy.realm') }}
+            </span>
+            <div class="inline-flex rounded-md border border-gray-300 dark:border-dark-600">
+              <button
+                type="button"
+                class="px-3 py-1 text-xs"
+                :class="
+                  realm === 'cn'
+                    ? 'bg-sky-600 text-white'
+                    : 'bg-transparent text-gray-600 dark:text-gray-300'
+                "
+                :disabled="generating || polling"
+                @click="realm = 'cn'"
+              >
+                {{ t('admin.accounts.oauth.workbuddy.realmCn') }}
+              </button>
+              <button
+                type="button"
+                class="px-3 py-1 text-xs"
+                :class="
+                  realm === 'intl'
+                    ? 'bg-sky-600 text-white'
+                    : 'bg-transparent text-gray-600 dark:text-gray-300'
+                "
+                :disabled="generating || polling"
+                @click="realm = 'intl'"
+              >
+                {{ t('admin.accounts.oauth.workbuddy.realmIntl') }}
+              </button>
+            </div>
+          </div>
           <button
             type="button"
             class="btn btn-secondary mt-3"
@@ -212,6 +246,13 @@ const emit = defineEmits<{
 const { t } = useI18n()
 const appStore = useAppStore()
 
+/**
+ * 区域选择：国内版（CodeBuddy，上游 codebuddy.cn / copilot.tencent.com）
+ * 或国际版（WorkBuddy，上游 workbuddy.ai）。
+ * 两区账号、state、上游文档彼此独立，登录时选错会拿不到 token。
+ */
+const realm = ref<'cn' | 'intl'>('cn')
+
 /** 轮询间隔：设备流通常 2~5 秒内完成授权。 */
 const POLL_INTERVAL_MS = 3_000
 
@@ -243,7 +284,7 @@ const startFlow = async () => {
   copied.value = false
   generating.value = true
   try {
-    const res = await workbuddyAPI.generateAuthUrl()
+    const res = await workbuddyAPI.generateAuthUrl(realm.value)
     authUrl.value = res.auth_url
     state.value = res.state
     generating.value = false
@@ -304,7 +345,9 @@ const createAccount = async () => {
       name: props.name.trim() || undefined,
       concurrency: props.concurrency,
       priority: props.priority,
-      group_ids: props.groupIds
+      group_ids: props.groupIds,
+      // 区域决定建到哪个平台：intl → workbuddy_intl（国际版独立账号池）。
+      realm: realm.value
     })
     appStore.showSuccess(t('admin.accounts.oauth.workbuddy.created'))
     emit('created')

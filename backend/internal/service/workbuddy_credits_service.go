@@ -260,6 +260,12 @@ func (s *WorkBuddyCreditsService) checkinOneAccount(ctx context.Context, account
 		UID:      account.GetCredential("uid"),
 		Nickname: account.Name,
 	}
+	// 国际版没有签到接口（只有网页侧每日活跃打卡），直接跳过而不是打上游。
+	if r := wbRealmForAccount(account); !r.HasCheckin {
+		result.Status = "skipped"
+		result.Detail = "international realm has no checkin endpoint"
+		return result
+	}
 	auth := s.wbEnsureFreshAuth(ctx, account)
 	if auth == nil || strings.TrimSpace(auth.AccessToken) == "" {
 		result.Status = "skipped"
@@ -347,16 +353,23 @@ type WorkBuddyAccountCredits struct {
 	CheckinStatus  string `json:"checkin_status,omitempty"`
 }
 
-// ListWorkBuddyAccounts 列出全部 workbuddy 账号。
+// ListWorkBuddyAccounts 列出全部 WorkBuddy 账号（国内版 + 国际版）。
+//
+// 两个平台的积分/签到协议同源，只是上游基址与 UA 不同（由账号自身 realm
+// 决定）。统一列出使管理端一次看到全部账号，各账号按自己的区域打上游。
 func (s *WorkBuddyCreditsService) ListWorkBuddyAccounts(ctx context.Context) ([]Account, error) {
 	if s == nil || s.accountRepo == nil {
 		return nil, infraerrors.New(http.StatusInternalServerError, "WORKBUDDY_CREDITS_NOT_CONFIGURED", "workbuddy credits service is not configured")
 	}
-	accounts, err := s.accountRepo.ListByPlatform(ctx, PlatformWorkBuddy)
-	if err != nil {
-		return nil, infraerrors.Newf(http.StatusInternalServerError, "WORKBUDDY_CREDITS_LIST_FAILED", "list accounts: %v", err)
+	var out []Account
+	for _, platform := range []string{PlatformWorkBuddy, PlatformWorkBuddyIntl} {
+		accounts, err := s.accountRepo.ListByPlatform(ctx, platform)
+		if err != nil {
+			return nil, infraerrors.Newf(http.StatusInternalServerError, "WORKBUDDY_CREDITS_LIST_FAILED", "list accounts (%s): %v", platform, err)
+		}
+		out = append(out, accounts...)
 	}
-	return accounts, nil
+	return out, nil
 }
 
 // QueryAllCredits 查询全部 workbuddy 账号积分并汇总

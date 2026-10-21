@@ -1187,7 +1187,7 @@ func (h *GatewayHandler) Models(c *gin.Context) {
 	}
 	// WorkBuddy CN（CodeBuddy）走 OpenAI 网关转发，模型列表须用 OpenAI 格式
 	// 返回（否则此前会落到 claude.DefaultModels，客户端拿到的是 Claude 模型目录）。
-	if platform == service.PlatformWorkBuddy {
+	if service.IsWorkBuddyPlatform(platform) {
 		writeOpenAIModelsList(c, defaultModelIDsForPlatform(platform))
 		return
 	}
@@ -1459,7 +1459,7 @@ func defaultModelIDsForPlatform(platform string) []string {
 		return xai.DefaultModelIDs()
 	case service.PlatformOpenCodeGo:
 		return service.DefaultOpenCodeGoModelIDs()
-	case service.PlatformWorkBuddy:
+	case service.PlatformWorkBuddy, service.PlatformWorkBuddyIntl:
 		// 上游动态模型接口不可达时的回退表（与 workbuddy2api staticModels 一致）。
 		return service.DefaultWorkBuddyModelIDs()
 	case service.PlatformComposite:

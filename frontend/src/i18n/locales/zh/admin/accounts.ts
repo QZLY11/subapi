@@ -1345,7 +1345,10 @@ export default {
         },
         // WorkBuddy CN（CodeBuddy）设备授权流
         workbuddy: {
-          title: 'WorkBuddy 账号授权',
+          title: 'WorkBuddy / CodeBuddy 账号授权',
+          realm: '区域',
+          realmCn: '国内版 CodeBuddy',
+          realmIntl: '国际版 WorkBuddy',
           step1GenerateUrl: '生成设备授权链接',
           step1Desc: '点击下方按钮向腾讯 CodeBuddy 申请一次性授权链接（state 有效期 5 分钟）。',
           generateAuthUrl: '生成授权链接',

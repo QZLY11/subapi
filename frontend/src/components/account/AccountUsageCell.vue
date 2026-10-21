@@ -455,7 +455,7 @@
     </template>
 
     <!-- WorkBuddy CN (CodeBuddy): credits balance + daily check-in -->
-    <template v-else-if="account.platform === 'workbuddy'">
+    <template v-else-if="isWorkBuddyPlatform(account.platform)">
       <WorkBuddyCreditsCell :account="account" @account-updated="emit('account-updated', $event)" />
     </template>
 
@@ -659,6 +659,7 @@ import type { Account, AccountUsageInfo, GeminiCredentials, WindowStats } from '
 import { buildOpenAIUsageRefreshKey } from '@/utils/accountUsageRefresh'
 import { enqueueUsageRequest } from '@/utils/usageLoadQueue'
 import { formatCompactNumber } from '@/utils/format'
+import { isWorkBuddyPlatform } from '@/utils/workbuddyPlatform'
 import UsageProgressBar from './UsageProgressBar.vue'
 import AccountQuotaInfo from './AccountQuotaInfo.vue'
 import OpenAIQuotaResetCell from './OpenAIQuotaResetCell.vue'
@@ -741,7 +742,7 @@ const showUsageWindows = computed(() => {
     return true
   }
   // WorkBuddy：积分余额 + 每日签到，由 WorkBuddyCreditsCell 自行探测与展示。
-  if (props.account.platform === 'workbuddy') {
+  if (isWorkBuddyPlatform(props.account.platform)) {
     return true
   }
   return props.account.type === 'oauth' || props.account.type === 'setup-token'

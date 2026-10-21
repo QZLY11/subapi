@@ -292,7 +292,7 @@ func (s *RateLimitService) applyCNProviderReactive429(
 		}
 		return false
 	}
-	if !account.IsCNProvider() && !account.IsWorkBuddyOAuth() && account.Platform != PlatformWorkBuddy {
+	if !account.IsCNProvider() && !account.IsWorkBuddyOAuth() && !account.IsWorkBuddy() {
 		return false
 	}
 	// 1) 余额不足文案：可恢复临时停调（含智谱 payg 这类无余额端点的场景）。

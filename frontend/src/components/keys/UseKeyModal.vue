@@ -1252,7 +1252,9 @@ function generateRoutedCodexFiles(
     deepseek: 'DeepSeek',
     minimax: 'MiniMax',
     opencode_go: 'OpenCode',
-    workbuddy: 'WorkBuddy',
+    // 国内版品牌 CodeBuddy，国际版品牌 WorkBuddy。
+    workbuddy: 'CodeBuddy',
+    workbuddy_intl: 'WorkBuddy',
     composite: 'Composite'
   }
   const label = labels[platform]

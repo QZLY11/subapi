@@ -31,11 +31,15 @@ const (
 	// PlatformOpenCodeGo 是 OpenCode 平台（账号类型 Zen 按量 / Go 订阅）。
 	// 值保持 opencode_go 以兼容已落库的分组、配额与 Composite 路由 CHECK。
 	PlatformOpenCodeGo = "opencode_go"
-	// PlatformWorkBuddy 是 WorkBuddy CN（CodeBuddy / copilot.tencent.com）平台。
-	// 走 OAuth 设备授权 + /v2/chat/completions 端点，协议上兼容 OpenAI Chat Completions，
-	// 经 OpenAI 网关转发（同 deepseek 家族）。
+	// PlatformWorkBuddy 是国内版（CodeBuddy / copilot.tencent.com，品牌名 CodeBuddy）。
+	// 值保持 "workbuddy" 以兼容已落库的账号、分组、配额与历史用量——
+	// UI 显示名改为「CodeBuddy」，底层标识不动。
 	PlatformWorkBuddy = "workbuddy"
-	PlatformComposite = "composite"
+	// PlatformWorkBuddyIntl 是国际版（WorkBuddy / www.workbuddy.ai）。
+	// 与国内版协议同源，但上游基址、Origin、UA、语种不同（见 wbRealm）；
+	// 两区账号池完全隔离，不参与彼此调度。
+	PlatformWorkBuddyIntl = "workbuddy_intl"
+	PlatformComposite     = "composite"
 )
 
 // Account mode constants 区分国产供应商的「按量付费（余额）」与「Coding Plan」两种接入方式。

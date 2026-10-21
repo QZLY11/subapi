@@ -289,13 +289,20 @@ func (a *Account) IsMiniMax() bool {
 	return a.Platform == PlatformMiniMax
 }
 
+// IsWorkBuddy 报告账号是否属于 WorkBuddy 家族（国内版或国际版）。
+// 两者协议同源、共用同一套转发管线，差异只在区域出站参数。
 func (a *Account) IsWorkBuddy() bool {
-	return a != nil && a.Platform == PlatformWorkBuddy
+	return a != nil && (a.Platform == PlatformWorkBuddy || a.Platform == PlatformWorkBuddyIntl)
 }
 
-// IsWorkBuddyOAuth 报告账号是否为 WorkBuddy CN 的 OAuth 账号（设备授权流）。
+// IsWorkBuddyIntl 报告账号是否为国际版（上游 www.workbuddy.ai）。
+func (a *Account) IsWorkBuddyIntl() bool {
+	return a != nil && a.Platform == PlatformWorkBuddyIntl
+}
+
+// IsWorkBuddyOAuth 报告账号是否为 WorkBuddy 的 OAuth 账号（设备授权流）。
 func (a *Account) IsWorkBuddyOAuth() bool {
-	return a != nil && a.Platform == PlatformWorkBuddy && a.Type == AccountTypeWorkBuddyOAuth
+	return a.IsWorkBuddy() && a.Type == AccountTypeWorkBuddyOAuth
 }
 
 // IsCNProvider 报告是否为国产 OpenAI 兼容供应商（kimi/zhipu/deepseek/minimax）。
@@ -1395,10 +1402,11 @@ func (a *Account) GetOpenAIBaseURL() string {
 		return DefaultMiniMaxBaseURL
 	case PlatformOpenCodeGo:
 		return a.openCodeDefaultChatBaseURL()
-	case PlatformWorkBuddy:
-		// WorkBuddy CN 上游 base：/v2 结尾使 buildOpenAIEndpointURL 拼出
+	case PlatformWorkBuddy, PlatformWorkBuddyIntl:
+		// WorkBuddy 上游 base：/v2 结尾使 buildOpenAIEndpointURL 拼出
 		// /v2/chat/completions（openAIBaseURLHasVersionSuffix("/v2")==true → path += "/chat/completions"）。
-		return "https://copilot.tencent.com/v2"
+		// 按区域取基址：国内 copilot.tencent.com，国际 www.workbuddy.ai。
+		return strings.TrimRight(wbRealmForAccount(a).ChatBase, "/") + "/v2"
 	default:
 		return "https://api.openai.com"
 	}

@@ -1285,7 +1285,10 @@ export default {
         },
         // WorkBuddy CN (CodeBuddy) device authorization flow
         workbuddy: {
-          title: 'WorkBuddy Account Authorization',
+          title: 'WorkBuddy / CodeBuddy account authorization',
+          realm: 'Region',
+          realmCn: 'CodeBuddy (China)',
+          realmIntl: 'WorkBuddy (Global)',
           step1GenerateUrl: 'Generate the device authorization link',
           step1Desc:
             'Request a one-time authorization link from Tencent CodeBuddy (the state is valid for 5 minutes).',

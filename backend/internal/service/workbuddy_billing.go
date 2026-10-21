@@ -24,7 +24,8 @@ import (
 )
 
 const (
-	// wbBillingBaseCN billing 域基址（与 chat 域的 copilot.tencent.com 不同）。
+	// wbBillingBaseCN 国内版 billing 域基址（与 chat 域的 copilot.tencent.com 不同）。
+	// 国际版基址见 wbRealmIntl.BillingBase（www.workbuddy.ai）。
 	wbBillingBaseCN = "https://www.codebuddy.cn"
 
 	wbBillingMeterPath   = "/v2/billing/meter/get-user-resource"
@@ -83,7 +84,7 @@ type workBuddyResourcePackage struct {
 	CycleCapacityUsed   int64  `json:"CycleCapacityUsed"`
 }
 
-// billingBase 返回 billing 域基址（测试可覆盖）。
+// billingBaseURL 返回 billing 域基址（测试可覆盖）。
 func (c *WorkBuddyClient) billingBaseURL() string {
 	if c != nil && strings.TrimSpace(c.BillingBase) != "" {
 		return strings.TrimRight(c.BillingBase, "/")
@@ -91,13 +92,30 @@ func (c *WorkBuddyClient) billingBaseURL() string {
 	return wbBillingBaseCN
 }
 
+// billingBaseFor 按区域返回 billing 域基址（覆盖字段优先）。
+func (c *WorkBuddyClient) billingBaseFor(realm string) string {
+	if c != nil && strings.TrimSpace(c.BillingBase) != "" {
+		return strings.TrimRight(c.BillingBase, "/")
+	}
+	return wbRealmByName(realm).BillingBase
+}
+
 // billingHeaders 设置 billing 域请求头。
 // 与 workbuddy2api BillingHeaders 对齐：只带 Authorization/Accept/Content-Type/UA
 // 与身份头，不带 Origin/Referer（billing 域不校验来源白名单）。
+// UA 按区域切：国内 WorkBuddy/5.8.3，国际 WorkBuddy/5.8.4。
 func (c *WorkBuddyClient) billingHeaders(req *http.Request, a *WorkBuddyAuth) {
+	realm := wbRealmCN
+	if a != nil {
+		realm = a.realmName()
+	}
 	req.Header.Set("Accept", "application/json")
 	req.Header.Set("Content-Type", "application/json")
-	req.Header.Set("User-Agent", c.userAgent())
+	if ua := wbRealmByName(realm).BillingUA; ua != "" {
+		req.Header.Set("User-Agent", ua)
+	} else {
+		req.Header.Set("User-Agent", c.userAgent())
+	}
 	if a == nil {
 		return
 	}
@@ -130,7 +148,11 @@ func (c *WorkBuddyClient) billingJSON(ctx context.Context, a *WorkBuddyAuth, met
 		}
 		rdr = bytes.NewReader(raw)
 	}
-	req, err := http.NewRequestWithContext(ctx, method, c.billingBaseURL()+path, rdr)
+	realm := wbRealmCN
+	if a != nil {
+		realm = a.realmName()
+	}
+	req, err := http.NewRequestWithContext(ctx, method, c.billingBaseFor(realm)+path, rdr)
 	if err != nil {
 		return nil, err
 	}

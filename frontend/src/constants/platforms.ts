@@ -21,7 +21,11 @@ export const CONCRETE_PLATFORM_OPTIONS = [
   { value: 'deepseek', label: 'DeepSeek' },
   { value: 'minimax', label: 'MiniMax' },
   { value: 'opencode_go', label: 'OpenCode' },
-  { value: 'workbuddy', label: 'WorkBuddy' }
+  // 国内版（上游 copilot.tencent.com / www.codebuddy.cn）品牌为 CodeBuddy；
+  // 国际版（上游 www.workbuddy.ai）品牌为 WorkBuddy。底层 platform 标识
+  // 保持不变（workbuddy 已落库），只改显示名。
+  { value: 'workbuddy', label: 'CodeBuddy' },
+  { value: 'workbuddy_intl', label: 'WorkBuddy' }
 ] as const satisfies readonly PlatformOption<AccountPlatform>[]
 
 /** Platforms that can own a group. */

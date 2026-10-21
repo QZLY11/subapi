@@ -175,24 +175,34 @@ func (s *TokenRefreshService) SetRefreshAPI(api *OAuthRefreshAPI) {
 	s.refreshAPI = api
 }
 
-// SetWorkBuddyOAuthService 注册 WorkBuddy CN（CodeBuddy）OAuth 刷新器。
+// SetWorkBuddyOAuthService 注册 WorkBuddy OAuth 刷新器（国内版 + 国际版）。
+//
+// 两个平台共用同一套设备授权/刷新逻辑，差异只在区域上游基址（由账号自身
+// realm 决定，见 workbuddy_realm.go），因此注册两个平台名指向同一个刷新器。
 // 通过 setter 注入而非构造函数参数，避免改变既有 NewTokenRefreshService 签名
 // （大量测试直接构造该服务）。重复调用只注册一次。
 func (s *TokenRefreshService) SetWorkBuddyOAuthService(workbuddyOAuthService *WorkBuddyOAuthService) {
 	if s == nil || workbuddyOAuthService == nil {
 		return
 	}
-	for _, registration := range s.registrations {
-		if registration.platform == PlatformWorkBuddy {
-			return
-		}
-	}
 	refresher := NewWorkBuddyTokenRefresher(workbuddyOAuthService)
-	s.registrations = append(s.registrations, tokenRefreshRegistration{
-		platform:  PlatformWorkBuddy,
-		refresher: refresher,
-		executor:  refresher,
-	})
+	for _, platform := range []string{PlatformWorkBuddy, PlatformWorkBuddyIntl} {
+		registered := false
+		for _, registration := range s.registrations {
+			if registration.platform == platform {
+				registered = true
+				break
+			}
+		}
+		if registered {
+			continue
+		}
+		s.registrations = append(s.registrations, tokenRefreshRegistration{
+			platform:  platform,
+			refresher: refresher,
+			executor:  refresher,
+		})
+	}
 }
 
 // SetRefreshPolicy 注入后台刷新调用侧策略（用于显式化平台/场景差异行为）。

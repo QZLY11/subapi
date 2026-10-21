@@ -78,6 +78,7 @@ import { useI18n } from 'vue-i18n'
 import { adminAPI } from '@/api/admin'
 import type { WorkBuddyCredits } from '@/api/admin/workbuddy'
 import type { Account } from '@/types'
+import { isWorkBuddyPlatform } from '@/utils/workbuddyPlatform'
 
 const props = defineProps<{
   account: Account
@@ -90,7 +91,7 @@ const emit = defineEmits<{
 const { t } = useI18n()
 
 // 仅 WorkBuddy 平台账号展示。
-const visible = computed(() => props.account.platform === 'workbuddy')
+const visible = computed(() => isWorkBuddyPlatform(props.account.platform))
 
 const loading = ref(false)
 const checkinLoading = ref(false)

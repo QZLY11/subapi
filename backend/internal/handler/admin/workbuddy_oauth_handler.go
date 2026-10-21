@@ -33,10 +33,29 @@ func NewWorkBuddyOAuthHandler(
 	}
 }
 
+// WorkBuddyAuthURLRequest 授权链接请求。
+// realm 选区域：cn=国内版(CodeBuddy) / intl=国际版(WorkBuddy)；缺省按国内版。
+type WorkBuddyAuthURLRequest struct {
+	Realm string `json:"realm"`
+	// Platform 可选：直接传平台标识（workbuddy / workbuddy_intl），
+	// 与 realm 等价时优先用 realm。
+	Platform string `json:"platform"`
+}
+
 // GenerateAuthURL 启动 WorkBuddy 设备授权流，返回授权链接 + state。
 // POST /api/v1/admin/workbuddy/oauth/auth-url
 func (h *WorkBuddyOAuthHandler) GenerateAuthURL(c *gin.Context) {
-	result, err := h.workBuddyOAuthService.GenerateAuthURL(c.Request.Context())
+	var req WorkBuddyAuthURLRequest
+	// body 可空：老前端不带参数时按国内版处理。
+	_ = c.ShouldBindJSON(&req)
+	realm := strings.TrimSpace(req.Realm)
+	switch {
+	case realm == "" && req.Platform == "workbuddy_intl":
+		realm = "intl"
+	case realm == "" && req.Platform == "workbuddy":
+		realm = "cn"
+	}
+	result, err := h.workBuddyOAuthService.GenerateAuthURL(c.Request.Context(), realm)
 	if err != nil {
 		response.ErrorFrom(c, err)
 		return
@@ -149,6 +168,10 @@ type WorkBuddyCreateFromOAuthRequest struct {
 	Concurrency int     `json:"concurrency"`
 	Priority    int     `json:"priority"`
 	GroupIDs    []int64 `json:"group_ids"`
+	// Realm 区域：cn=国内版(CodeBuddy) / intl=国际版(WorkBuddy)。缺省国内版。
+	Realm string `json:"realm"`
+	// Platform 平台标识（workbuddy / workbuddy_intl），与 Realm 等价。
+	Platform string `json:"platform"`
 }
 
 // CreateAccountFromOAuth 用 poll 得到的 token 直接创建 WorkBuddy 账号。
@@ -186,9 +209,16 @@ func (h *WorkBuddyOAuthHandler) CreateAccountFromOAuth(c *gin.Context) {
 		expiresAt = &tokenInfo.ExpiresAt
 		autoPause = true
 	}
+	// 平台按区域决定：国际版建到 workbuddy_intl，与国内版账号池隔离，
+	// 避免同名模型跨区混跑（两区出站指纹与风控口径不同）。
+	platform := service.PlatformWorkBuddy
+	if strings.EqualFold(strings.TrimSpace(req.Realm), "intl") ||
+		strings.EqualFold(strings.TrimSpace(req.Platform), service.PlatformWorkBuddyIntl) {
+		platform = service.PlatformWorkBuddyIntl
+	}
 	account, err := h.adminService.CreateAccount(c.Request.Context(), &service.CreateAccountInput{
 		Name:               name,
-		Platform:           service.PlatformWorkBuddy,
+		Platform:           platform,
 		Type:               service.AccountTypeWorkBuddyOAuth,
 		Credentials:        credentials,
 		Concurrency:        req.Concurrency,

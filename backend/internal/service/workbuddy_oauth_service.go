@@ -31,6 +31,9 @@ type wbOAuthSession struct {
 	UpstreamURL string
 	CreatedAt   time.Time
 	Token       *WorkBuddyTokenInfo
+	// Realm 发起授权时的区域（cn / intl）。poll 与建号都沿用同一区域，
+	// 避免国际版 state 打到国内版端点导致 401。
+	Realm string
 }
 
 // workbuddySessionStore 内存 session store（state 维度，单实例足够；多实例需换 Redis）。
@@ -115,19 +118,37 @@ func NewWorkBuddyOAuthService() *WorkBuddyOAuthService {
 type WorkBuddyAuthURLResult struct {
 	AuthURL string `json:"auth_url"`
 	State   string `json:"state"`
+	// Realm 本次授权所属区域（cn / intl），前端据此决定建号时的平台。
+	Realm string `json:"realm,omitempty"`
 }
 
 // GenerateAuthURL 启动设备授权：请求上游签发 state + authUrl。
-func (s *WorkBuddyOAuthService) GenerateAuthURL(ctx context.Context) (*WorkBuddyAuthURLResult, error) {
+// GenerateAuthURL 向指定区域申请设备授权链接。
+//
+// realm 为空时按国内版处理（兼容既有调用）；国际版传 wbRealmIntl。
+// 上游签名 state 的端点、Origin 与 UA 都随区域变化 —— 拿国内版的链接去
+// 登国际版账号会直接失败。
+func (s *WorkBuddyOAuthService) GenerateAuthURL(ctx context.Context, realm string) (*WorkBuddyAuthURLResult, error) {
 	if s == nil || s.client == nil {
 		return nil, infraerrors.InternalServer("WORKBUDDY_OAUTH_CLIENT_NOT_CONFIGURED", "workbuddy oauth client is not configured")
 	}
+	if _, ok := wbRealms[realm]; !ok {
+		realm = wbRealmCN
+	}
 	req, err := http.NewRequestWithContext(ctx, http.MethodPost,
-		s.client.chatBase()+"/v2/plugin/auth/state?platform=CLI", bytes.NewReader([]byte("{}")))
+		s.client.chatBaseFor(realm)+"/v2/plugin/auth/state?platform=CLI", bytes.NewReader([]byte("{}")))
 	if err != nil {
 		return nil, infraerrors.New(http.StatusInternalServerError, "WORKBUDDY_OAUTH_STATE_FAILED", err.Error())
 	}
 	s.client.CommonHeaders(req, nil)
+	// 授权域的 Origin/UA 也要按区域：国际版用 workbuddy.ai + 对应 UA。
+	r := wbRealmByName(realm)
+	req.Header.Set("Origin", r.Origin)
+	req.Header.Set("Referer", r.Origin+"/")
+	req.Header.Set("User-Agent", s.client.userAgentFor(realm))
+	if v := strings.TrimSpace(r.AcceptLanguage); v != "" {
+		req.Header.Set("Accept-Language", v)
+	}
 	data, err := s.client.doJSON(req)
 	if err != nil {
 		return nil, infraerrors.New(http.StatusBadGateway, "WORKBUDDY_OAUTH_STATE_FAILED", err.Error())
@@ -143,8 +164,9 @@ func (s *WorkBuddyOAuthService) GenerateAuthURL(ctx context.Context) (*WorkBuddy
 		State:       st.State,
 		UpstreamURL: st.AuthURL,
 		CreatedAt:   time.Now(),
+		Realm:       realm,
 	})
-	return &WorkBuddyAuthURLResult{AuthURL: st.AuthURL, State: st.State}, nil
+	return &WorkBuddyAuthURLResult{AuthURL: st.AuthURL, State: st.State, Realm: realm}, nil
 }
 
 // WorkBuddyTokenInfo 兑换/刷新后的完整 token + 账号信息。
@@ -165,6 +187,12 @@ func (s *WorkBuddyOAuthService) PollLogin(ctx context.Context, state string) (*W
 	if state == "" {
 		return nil, infraerrors.BadRequest("WORKBUDDY_OAUTH_STATE_REQUIRED", "oauth state is required")
 	}
+	// 区域从发起授权的会话里取：国际版 state 必须打到 workbuddy.ai，
+	// 打到国内版端点会被判无效。
+	realm := wbRealmCN
+	if sess, ok := s.sessionStore.get(state); ok && sess.Realm != "" {
+		realm = sess.Realm
+	}
 	if _, ok := s.sessionStore.get(state); !ok {
 		// 已有解析结果时不依赖 TTL 内的原始会话存在性（state 可能刚过期）。
 		if _, cached := s.sessionStore.consumeToken(state); !cached {
@@ -175,14 +203,18 @@ func (s *WorkBuddyOAuthService) PollLogin(ctx context.Context, state string) (*W
 	if cached, ok := s.sessionStore.consumeToken(state); ok {
 		return cached, nil
 	}
+	r := wbRealmByName(realm)
 
 	// GET /v2/plugin/auth/token?state=
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet,
-		s.client.chatBase()+"/v2/plugin/auth/token?state="+state, nil)
+		s.client.chatBaseFor(realm)+"/v2/plugin/auth/token?state="+state, nil)
 	if err != nil {
 		return nil, infraerrors.New(http.StatusInternalServerError, "WORKBUDDY_OAUTH_POLL_FAILED", err.Error())
 	}
 	s.client.CommonHeaders(req, nil)
+	req.Header.Set("Origin", r.Origin)
+	req.Header.Set("Referer", r.Origin+"/")
+	req.Header.Set("User-Agent", s.client.userAgentFor(realm))
 	data, err := s.client.doJSON(req)
 	if err != nil {
 		// pending：上游返回业务 code 非 0（"login ing"）。判定为未完成而非错误。
@@ -209,7 +241,7 @@ func (s *WorkBuddyOAuthService) PollLogin(ctx context.Context, state string) (*W
 
 	// GET /v2/plugin/login/account?state= 拿 uid/nickname/enterpriseId（带 Bearer）
 	acctReq, err := http.NewRequestWithContext(ctx, http.MethodGet,
-		s.client.chatBase()+"/v2/plugin/login/account?state="+state, nil)
+		s.client.chatBaseFor(realm)+"/v2/plugin/login/account?state="+state, nil)
 	if err == nil {
 		auth := &WorkBuddyAuth{AccessToken: tok.AccessToken}
 		s.client.CommonHeaders(acctReq, auth)
