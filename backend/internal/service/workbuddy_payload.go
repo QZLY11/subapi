@@ -16,7 +16,41 @@ import (
 // 自动落到 ≤high 的最高支持档。
 const defaultWorkBuddyDeepSeekEffort = "high"
 
-// PrepareWorkBuddyChatPayload 改写发往 CodeBuddy 上游的 chat 请求体：
+// ensureWorkBuddyLeadingSystem 保证 messages 首条是 system。
+//
+// 上游规则：首条消息必须是 system prompt。客户端直接发 [{"role":"user",...}]
+// 会被拦成 400 code=11128「first message is not system prompt」——
+// 这个错误码与「渠道校验失败」共用 11128，displayTips 会把原因误导成
+// 「不是官方客户端发出的」，排查时容易误判成请求头问题。
+//
+// 处理策略：
+//   - 首条已是 system → 原样返回（不动用户/客户端的提示词）
+//   - 首条不是 system → 在最前面补一条最小 system（保持其余消息顺序不变）
+//
+// 只在 messages 非空时介入；空 messages 交给上游自行报错。
+func ensureWorkBuddyLeadingSystem(obj map[string]any) {
+	if obj == nil {
+		return
+	}
+	msgs, ok := obj["messages"].([]any)
+	if !ok || len(msgs) == 0 {
+		return
+	}
+	first, ok := msgs[0].(map[string]any)
+	if ok {
+		if role, _ := first["role"].(string); strings.EqualFold(strings.TrimSpace(role), "system") {
+			return
+		}
+	}
+	// 上游要求「首条是 system」，但未规定内容：用最小占位，避免污染用户提示词。
+	lead := map[string]any{
+		"role":    "system",
+		"content": "You are a helpful assistant.",
+	}
+	obj["messages"] = append([]any{lead}, msgs...)
+}
+
+// PrepareWorkBuddyChatPayload 改写发往 CodeBuddy / WorkBuddy 上游的 chat 请求体：
 //  1. 强制 stream:true（上游拒绝非流式）
 //  2. tool_choice 归一化（上游该字段是 string，对象形式会 400 code=11101）
 //  3. developer role 归一为 system（上游 role 白名单不含 developer，否则 400 code=11-128）
@@ -50,6 +84,10 @@ func prepareWorkBuddyChatPayloadWithIdentity(src []byte, uid, conversationID str
 	normalizeWorkBuddyRoles(obj)
 	normalizeWorkBuddyArrayContent(obj)
 	sanitizeWorkBuddyBrandWords(obj)
+	// 上游要求首条消息必须是 system（否则 400 code=11128
+	// "first message is not system prompt"，displayTips 会误报成渠道校验失败）。
+	// 放在 role 归一之后：developer→system 已生效，此处的判定才准确。
+	ensureWorkBuddyLeadingSystem(obj)
 	// 顺序敏感：注入的默认档也要走降级管线（模型不支持默认档时落到 ≤ 默认档的
 	// 最高支持档，保证不出站不合规档位）。
 	injectWorkBuddyThinking(obj)

@@ -984,7 +984,8 @@ export default {
         deepseek: 'DeepSeek',
         minimax: 'MiniMax',
         opencode_go: 'OpenCode',
-        workbuddy: 'WorkBuddy',
+        workbuddy: 'CodeBuddy',
+        workbuddy_intl: 'WorkBuddy',
         composite: 'Composite',
       },
       deleteConfirm:

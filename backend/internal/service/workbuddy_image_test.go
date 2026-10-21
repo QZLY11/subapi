@@ -21,7 +21,12 @@ func findImageURLPart(t *testing.T, out []byte) (map[string]any, []any) {
 	if !ok || len(msgs) == 0 {
 		t.Fatalf("messages missing: %s", out)
 	}
-	msg, _ := msgs[0].(map[string]any)
+	// 上游要求首条是 system，出站体可能被补了一条前置 system；
+	// 这里按「含 image_url 的消息」定位，而不是硬取第 0 条。
+	msg := firstMessageWithImagePart(msgs)
+	if msg == nil {
+		t.Fatalf("no message with image content found: %s", out)
+	}
 	content, ok := msg["content"].([]any)
 	if !ok {
 		t.Fatalf("content must stay an array when an image is present; got %T (%v)", msg["content"], msg["content"])
@@ -107,8 +112,7 @@ func TestWorkBuddyArrayContent_TextOnlyStillFolds(t *testing.T) {
 	if err := json.Unmarshal(out, &obj); err != nil {
 		t.Fatalf("unmarshal: %v", err)
 	}
-	msgs := obj["messages"].([]any)
-	content := msgs[0].(map[string]any)["content"]
+	content := firstMessageContentByRole(obj, "user")
 	s, ok := content.(string)
 	if !ok {
 		t.Fatalf("text-only array must fold to string, got %T", content)
@@ -168,8 +172,44 @@ func TestWorkBuddyArrayContent_NoImageUnaffected(t *testing.T) {
 	out = PrepareWorkBuddyChatPayload([]byte(`{"model":"glm-5.2","messages":[{"role":"user","content":[]}]}`))
 	var obj map[string]any
 	_ = json.Unmarshal(out, &obj)
-	content := obj["messages"].([]any)[0].(map[string]any)["content"]
+	content := firstMessageContentByRole(obj, "user")
 	if s, ok := content.(string); !ok || s != "" {
 		t.Fatalf("empty array should fold to empty string, got %T %v", content, content)
 	}
+}
+
+// firstMessageWithImagePart 返回第一条 content 数组里含 image_url 的消息。
+// 出站体会按上游要求补前置 system，测试不能假设图片消息在第 0 条。
+func firstMessageWithImagePart(msgs []any) map[string]any {
+	for _, raw := range msgs {
+		msg, ok := raw.(map[string]any)
+		if !ok {
+			continue
+		}
+		parts, ok := msg["content"].([]any)
+		if !ok {
+			continue
+		}
+		for _, rawPart := range parts {
+			if part, ok := rawPart.(map[string]any); ok && part["type"] == "image_url" {
+				return msg
+			}
+		}
+	}
+	return nil
+}
+
+// firstMessageContentByRole 返回指定 role 的第一条消息的 content。
+func firstMessageContentByRole(obj map[string]any, role string) any {
+	msgs, _ := obj["messages"].([]any)
+	for _, raw := range msgs {
+		msg, ok := raw.(map[string]any)
+		if !ok {
+			continue
+		}
+		if r, _ := msg["role"].(string); strings.EqualFold(r, role) {
+			return msg["content"]
+		}
+	}
+	return nil
 }
