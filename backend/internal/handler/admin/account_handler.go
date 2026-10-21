@@ -2950,7 +2950,7 @@ func (h *AccountHandler) GetAvailableModels(c *gin.Context) {
 	// Handle WorkBuddy CN accounts: 优先动态拉取上游模型目录，失败回落静态目录。
 	// 走 OpenAI 网关转发，模型条目须带 display_name 供测试连接弹窗的下拉框展示。
 	if account.IsWorkBuddy() {
-		modelIDs := service.DefaultWorkBuddyModelIDs()
+		modelIDs := service.DefaultWorkBuddyModelIDsFor(account.Platform)
 		if h.accountTestService != nil {
 			if liveIDs, fetchErr := h.accountTestService.FetchUpstreamSupportedModels(c.Request.Context(), account); fetchErr == nil && len(liveIDs) > 0 {
 				modelIDs = liveIDs

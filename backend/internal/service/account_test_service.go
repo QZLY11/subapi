@@ -473,7 +473,10 @@ func (s *AccountTestService) testCNProviderChatCompletionsConnection(c *gin.Cont
 func (s *AccountTestService) testWorkBuddyAccountConnection(c *gin.Context, account *Account, modelID string, prompt string) error {
 	testModelID := strings.TrimSpace(modelID)
 	if testModelID == "" {
-		testModelID = DefaultWorkBuddyTestModel
+		// 回退模型必须按区域取：国内版 glm-5.2、国际版 deepseek-v4.1-flash。
+		// 用国内版模型名去打国际版上游会得到 11102 model service info not found，
+		// 表现成「测试连接失败」而不是「模型选错」，很容易误判成鉴权/网络问题。
+		testModelID = DefaultWorkBuddyTestModelFor(account.Platform)
 	}
 	testModelID = account.GetMappedModel(testModelID)
 

@@ -298,7 +298,8 @@ func defaultModelsListCandidateIDs(platform string) []string {
 		return DefaultOpenCodeGoModelIDs()
 	case PlatformWorkBuddy, PlatformWorkBuddyIntl:
 		// 上游目录动态拉取失败时的回退；不填会落到 default 分支返回 Claude 模型。
-		return DefaultWorkBuddyModelIDs()
+		// 按区域取：两区模型名不通用。
+		return DefaultWorkBuddyModelIDsFor(platform)
 	case PlatformComposite:
 		return compositeDefaultModelsListCandidateIDs()
 	default:

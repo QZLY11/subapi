@@ -8,12 +8,16 @@ import (
 	"strings"
 )
 
-// wbModelsPath 是 WorkBuddy CN 的动态模型列表端点（不在 /v2 下，故独立于 chat base）。
+// wbModelsPath 是 WorkBuddy 的动态模型列表端点（不在 /v2 下，故独立于 chat base）。
+// 国内版挂 copilot.tencent.com，国际版挂 www.workbuddy.ai，路径相同。
 const wbModelsPath = "/console/enterprises/personal/models"
 
 // buildWorkBuddyUpstreamModelsRequest 构造 WorkBuddy 动态模型列表请求。
-// 端点 https://copilot.tencent.com/console/enterprises/personal/models，
-// 使用账号 access_token 作 Bearer 并注入 WorkBuddy 身份头。
+//
+// 端点按账号区域取：国内版 https://copilot.tencent.com/console/...，
+// 国际版 https://www.workbuddy.ai/console/...。写死国内版会让国际版账号
+// 拿到国内版模型目录（含 deepseek-v4-flash/pro 等国际版不存在的模型），
+// 用它去打国际版上游会得到 11102 model service info not found。
 func (s *AccountTestService) buildWorkBuddyUpstreamModelsRequest(ctx context.Context, account *Account) (*http.Request, error) {
 	if account == nil {
 		return nil, newUpstreamModelSyncConfigError("Account is required", nil)
@@ -28,7 +32,9 @@ func (s *AccountTestService) buildWorkBuddyUpstreamModelsRequest(ctx context.Con
 		return nil, newUpstreamModelSyncConfigError("No WorkBuddy access token is available", nil)
 	}
 
-	req, err := http.NewRequestWithContext(ctx, http.MethodGet, wbUpstreamBaseCN+wbModelsPath, nil)
+	// 模型目录属于 chat 域（与 /v2/chat/completions 同源），按区域取基址。
+	base := strings.TrimRight(wbRealmForAccount(account).ChatBase, "/")
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, base+wbModelsPath, nil)
 	if err != nil {
 		return nil, newUpstreamModelSyncConfigError("Invalid WorkBuddy model list URL", err)
 	}

@@ -47,6 +47,10 @@ const (
 // DefaultWorkBuddyModelIDs 返回 CodeBuddy CN 当前公开的模型目录，
 // 供 /v1/models 在尚未同步上游列表时回退，以及账号白名单预填。
 // 与 workbuddy2api internal/server/handler.go staticModels 保持一致。
+//
+// 注意：这是**国内版**目录。国际版用 DefaultWorkBuddyIntlModelIDs ——
+// 两区模型名不通用（国际版没有 deepseek-v4-pro/flash、glm-5.2 等），
+// 用国内版目录去打国际版上游会得到 11102 model service info not found。
 func DefaultWorkBuddyModelIDs() []string {
 	return []string{
 		"glm-5.2",
@@ -60,6 +64,60 @@ func DefaultWorkBuddyModelIDs() []string {
 		"deepseek-v4-pro",
 		"deepseek-v4-flash",
 	}
+}
+
+// DefaultWorkBuddyIntlModelIDs 返回 WorkBuddy 国际版（www.workbuddy.ai）的
+// 模型目录，作为上游动态列表不可达时的回退与白名单预填。
+//
+// 取自 workbuddy2api-hub wb_catalog.py 的 _JSON 快照（官方桌面端模型清单，
+// 24 个）。这里只保留 Chat Completions 可直接调用的稳定项，剔除
+// default/fast/balanced 这类「Auto」别名与预览版，避免测试连接选到别名。
+func DefaultWorkBuddyIntlModelIDs() []string {
+	return []string{
+		// 免费层（x0.00）——国际版测试连接的首选
+		"deepseek-v4.1-flash",
+		"hy3",
+		"hy4-preview-f",
+		// 低价层
+		"glm-5.3-flash",
+		"gpt-5.6-luna",
+		"hy4-preview",
+		"kimi-k2.6",
+		// 主力层
+		"glm-5.3",
+		"glm-5.2",
+		"kimi-k2.8-preview",
+		"kimi-k3",
+		"gemini-3.5-flash",
+		"gpt-5.3-codex",
+		"gpt-5.4",
+		"gpt-5.5",
+		"gpt-5.6-terra",
+		"gpt-5.6-sol",
+		"gpt-6-astra",
+		"grok-4.7",
+		"primary-model",
+		"deep-model",
+	}
+}
+
+// DefaultWorkBuddyTestModelFor 返回指定平台「测试连接」的回退模型。
+//
+// 必须是该区域目录里真实存在的 Chat Completions 模型：国内版 glm-5.2，
+// 国际版 deepseek-v4.1-flash（免费且响应快）。
+func DefaultWorkBuddyTestModelFor(platform string) string {
+	if platform == PlatformWorkBuddyIntl {
+		return "deepseek-v4.1-flash"
+	}
+	return DefaultWorkBuddyTestModel
+}
+
+// DefaultWorkBuddyModelIDsFor 按平台返回静态回退目录。
+func DefaultWorkBuddyModelIDsFor(platform string) []string {
+	if platform == PlatformWorkBuddyIntl {
+		return DefaultWorkBuddyIntlModelIDs()
+	}
+	return DefaultWorkBuddyModelIDs()
 }
 
 // ============================================================================

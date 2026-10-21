@@ -1460,8 +1460,8 @@ func defaultModelIDsForPlatform(platform string) []string {
 	case service.PlatformOpenCodeGo:
 		return service.DefaultOpenCodeGoModelIDs()
 	case service.PlatformWorkBuddy, service.PlatformWorkBuddyIntl:
-		// 上游动态模型接口不可达时的回退表（与 workbuddy2api staticModels 一致）。
-		return service.DefaultWorkBuddyModelIDs()
+		// 上游动态模型接口不可达时的回退表，按区域取（两区模型名不通用）。
+		return service.DefaultWorkBuddyModelIDsFor(platform)
 	case service.PlatformComposite:
 		ids := make([]string, 0)
 		seen := make(map[string]struct{})

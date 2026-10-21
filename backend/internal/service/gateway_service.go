@@ -1477,8 +1477,9 @@ func (s *GatewayService) GetAvailableModels(ctx context.Context, groupID *int64,
 	return cloneStringSlice(models)
 }
 
-// fetchWorkBuddyGroupModels 从 WorkBuddy CN 上游动态拉取模型目录（/console/enterprises/personal/models）。
+// fetchWorkBuddyGroupModels 从 WorkBuddy 上游动态拉取模型目录（/console/enterprises/personal/models）。
 // 选用组内第一个带 access_token 的 WorkBuddy 账号；任何一步失败返回 nil，由调用方回落静态目录。
+// 端点按账号区域取（国内 copilot.tencent.com / 国际 www.workbuddy.ai），
 // 与 AccountTestService.fetchUpstreamModelList 的 workbuddy 分支保持同一请求形态：
 // GET + Bearer access_token + applyWorkBuddyUpstreamHeaders + 账号级头覆写。
 func (s *GatewayService) fetchWorkBuddyGroupModels(ctx context.Context, accounts []Account) []string {
@@ -1497,7 +1498,8 @@ func (s *GatewayService) fetchWorkBuddyGroupModels(ctx context.Context, accounts
 	}
 
 	accessToken := strings.TrimSpace(acc.GetCredential("access_token"))
-	req, err := http.NewRequestWithContext(ctx, http.MethodGet, wbUpstreamBaseCN+wbModelsPath, nil)
+	base := strings.TrimRight(wbRealmForAccount(acc).ChatBase, "/")
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, base+wbModelsPath, nil)
 	if err != nil {
 		return nil
 	}
